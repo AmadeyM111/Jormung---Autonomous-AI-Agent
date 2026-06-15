@@ -186,6 +186,25 @@ def test_build_memory_sections_partition_modes():
     assert any(section.startswith("## Scratchpad") for section in all_sections)
 
 
+def test_build_memory_sections_low_mode_truncates_dialogue_history():
+    from ouroboros.context import build_memory_sections
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp())
+    env, memory = _make_env_and_memory(tmpdir)
+    (tmpdir / "drive" / "memory" / "dialogue_blocks.json").write_text(
+        f'[{{"content": "dialogue {("X" * 9000)}"}}]',
+        encoding="utf-8",
+    )
+
+    max_text = "\n\n".join(build_memory_sections(memory, partition="volatile", context_mode="max"))
+    low_text = "\n\n".join(build_memory_sections(memory, partition="volatile", context_mode="low"))
+
+    assert "## Dialogue History" in max_text
+    assert "## Dialogue History" in low_text
+    assert len(low_text) < len(max_text)
+    assert "OMISSION NOTE: truncated" in low_text
+
+
 def test_llm_round_event_exposes_cache_hit_rate(tmp_path):
     from ouroboros.loop_llm_call import call_llm_with_retry
 

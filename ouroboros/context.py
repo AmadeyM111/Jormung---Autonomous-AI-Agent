@@ -336,11 +336,17 @@ def _append_file_size_budget_checks(env: Any, checks: List[str]) -> None:
         log.debug("Failed to append file size budget checks", exc_info=True)
 
 
-def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
+def build_memory_sections(
+    memory: Memory,
+    partition: str = "all",
+    *,
+    context_mode: str = "max",
+) -> List[str]:
     sections = []
 
     include_stable = partition in {"all", "stable"}
     include_volatile = partition in {"all", "volatile"}
+    low_context = context_mode == "low"
 
     if include_volatile:
         scratchpad_raw = memory.load_scratchpad()
@@ -361,9 +367,13 @@ def build_memory_sections(memory: Memory, partition: str = "all") -> List[str]:
         if dialogue_blocks:
             blocks_md = memory.format_blocks_as_markdown(dialogue_blocks)
             if blocks_md.strip():
+                if low_context:
+                    blocks_md = truncate_review_artifact(blocks_md, limit=4096)
                 sections.append("## Dialogue History\n\n" + blocks_md)
         legacy_summary = safe_read(memory.drive_root / "memory" / "dialogue_summary.md").strip()
         if legacy_summary:
+            if low_context:
+                legacy_summary = truncate_review_artifact(legacy_summary, limit=2048)
             sections.append("## Legacy Dialogue Summary (retired flat format, read-only fallback)\n\n" + legacy_summary)
 
     if partition == "all":
@@ -420,8 +430,15 @@ def _format_recent_reflections(entries: List[Dict[str, Any]], limit: int = 10) -
     return "\n\n".join(blocks)
 
 
-def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[str]:
+def build_recent_sections(
+    memory: Memory,
+    env: Any,
+    task_id: str = "",
+    *,
+    context_mode: str = "max",
+) -> List[str]:
     sections = []
+    low_context = context_mode == "low"
 
     dialogue_meta = memory.load_dialogue_meta()
     try:
@@ -442,10 +459,12 @@ def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[s
     # exists, the older span is represented by dialogue_blocks.json and the whole
     # suffix after that offset remains raw (P1: horizon preserved, granularity
     # varies but unconsolidated dialogue is not cut away).
-    _context_mode = get_context_mode()
+    _context_mode = context_mode or get_context_mode()
     _chat_tail = MAX_RECENT_CHAT_TAIL
     if _context_mode == "low" and consolidated_offset > 0:
         _chat_tail = 10**9
+    if low_context:
+        _chat_tail = min(_chat_tail, 200)
     chat_entries = memory.read_jsonl_tail_after_offset(
         "chat.jsonl",
         consolidated_offset,
@@ -453,27 +472,35 @@ def build_recent_sections(memory: Memory, env: Any, task_id: str = "") -> List[s
     )
     chat_summary = memory.summarize_chat(chat_entries)
     if chat_summary:
+        if low_context:
+            chat_summary = truncate_review_artifact(chat_summary, limit=2400)
         sections.append("## Recent chat\n\n" + chat_summary)
 
     for log_name, header, formatter in (
-        ("progress.jsonl", "## Recent progress", lambda rows: memory.summarize_progress(rows, limit=50)),
+        ("progress.jsonl", "## Recent progress", lambda rows: memory.summarize_progress(rows, limit=20 if low_context else 50)),
         ("tools.jsonl", "## Recent tools", memory.summarize_tools),
         ("events.jsonl", "## Recent events", memory.summarize_events),
     ):
-        entries = memory.read_jsonl_tail(log_name, 200)
+        entries = memory.read_jsonl_tail(log_name, 80 if low_context else 200)
         if task_id:
             entries = [e for e in entries if str(e.get("task_id", "")).strip() == task_id]
         summary = formatter(entries)
         if summary:
+            if low_context:
+                summary = truncate_review_artifact(summary, limit=1600)
             sections.append(f"{header}\n\n{summary}")
 
-    supervisor_summary = memory.summarize_supervisor(memory.read_jsonl_tail("supervisor.jsonl", 200))
+    supervisor_summary = memory.summarize_supervisor(memory.read_jsonl_tail("supervisor.jsonl", 80 if low_context else 200))
     if supervisor_summary:
+        if low_context:
+            supervisor_summary = truncate_review_artifact(supervisor_summary, limit=1600)
         sections.append("## Supervisor\n\n" + supervisor_summary)
 
-    reflections_entries = memory.read_jsonl_tail("task_reflections.jsonl", 20)
-    reflections_text = _format_recent_reflections(reflections_entries, limit=10)
+    reflections_entries = memory.read_jsonl_tail("task_reflections.jsonl", 8 if low_context else 20)
+    reflections_text = _format_recent_reflections(reflections_entries, limit=4 if low_context else 10)
     if reflections_text:
+        if low_context:
+            reflections_text = truncate_review_artifact(reflections_text, limit=1800)
         sections.append("## Execution reflections\n\n" + reflections_text)
 
     return sections
@@ -898,7 +925,11 @@ def build_llm_messages(
     static_text = "\n\n".join(static_parts)
 
     semi_stable_parts = []
-    semi_stable_parts.extend(build_memory_sections(memory, partition="stable"))
+    semi_stable_parts.extend(build_memory_sections(
+        memory,
+        partition="stable",
+        context_mode=context_mode,
+    ))
     semi_stable_parts.extend(build_knowledge_sections(env))
 
     deep_review_path = env.drive_path("memory/deep_review.md")
@@ -919,12 +950,18 @@ def build_llm_messages(
     dynamic_parts = []
     if health_section:
         dynamic_parts.append(health_section)
-    dynamic_parts.extend(build_memory_sections(memory, partition="volatile"))
+    dynamic_parts.extend(build_memory_sections(
+        memory,
+        partition="volatile",
+        context_mode=context_mode,
+    ))
 
     registry_digest = _build_registry_digest(env)
     if registry_digest:
+        if context_mode == "low":
+            registry_digest = truncate_review_artifact(registry_digest, limit=1600)
         dynamic_parts.append(registry_digest)
-    installed_skills = _build_installed_skills_section(env)
+    installed_skills = _build_installed_skills_section(env, max_lines=(40 if context_mode == "low" else 100))
     if installed_skills:
         dynamic_parts.append(installed_skills)
     dynamic_parts.extend([
@@ -945,6 +982,8 @@ def build_llm_messages(
 
         backlog_digest = format_backlog_digest(env.drive_root)
         if backlog_digest:
+            if context_mode == "low":
+                backlog_digest = truncate_review_artifact(backlog_digest, limit=1600)
             dynamic_parts.append(backlog_digest)
     except Exception:
         log.debug("Failed to build improvement backlog digest", exc_info=True)
@@ -956,6 +995,8 @@ def build_llm_messages(
         except Exception:
             log.debug("Failed to build review continuity section", exc_info=True)
     if review_section:
+        if context_mode == "low":
+            review_section = truncate_review_artifact(review_section, limit=1600)
         dynamic_parts.append(review_section)
     else:
         try:
@@ -967,11 +1008,18 @@ def build_llm_messages(
                     repo_dir=pathlib.Path(env.repo_dir),
                 )
                 if advisory_section:
+                    if context_mode == "low":
+                        advisory_section = truncate_review_artifact(advisory_section, limit=1600)
                     dynamic_parts.append(advisory_section)
         except Exception:
             log.debug("Failed to build advisory review status section", exc_info=True)
 
-    dynamic_parts.extend(build_recent_sections(memory, env, task_id=task.get("id", "")))
+    dynamic_parts.extend(build_recent_sections(
+        memory,
+        env,
+        task_id=task.get("id", ""),
+        context_mode=context_mode,
+    ))
 
     dynamic_text = "\n\n".join(dynamic_parts)
 
