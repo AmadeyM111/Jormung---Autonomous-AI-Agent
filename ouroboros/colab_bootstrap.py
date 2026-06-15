@@ -157,6 +157,7 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
     settings["OUROBOROS_REVIEW_MODELS"] = ",".join([qualified_model, qualified_model])
     settings["OUROBOROS_SCOPE_REVIEW_MODEL"] = qualified_model
     settings["OUROBOROS_SCOPE_REVIEW_MODELS"] = qualified_model
+    settings["OUROBOROS_CONTEXT_MODE"] = "low"
 
     for key in _LOCAL_RUNTIME_KEYS:
         if key.startswith("USE_LOCAL_"):

@@ -51,6 +51,15 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     assert out["USE_LOCAL_CONSCIOUSNESS"] is False
     assert out["USE_LOCAL_FALLBACK"] is False
 
+def test_build_colab_settings_groq_profile_defaults_to_low_context_mode():
+    from ouroboros.colab_bootstrap import build_colab_settings
+    out = build_colab_settings({
+        "GROQ_API_KEY": "gsk_test_key_1234567890",
+    }, existing={
+        "OUROBOROS_CONTEXT_MODE": "max",
+    })
+    assert out["OUROBOROS_CONTEXT_MODE"] == "low"
+
 def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
     from ouroboros.colab_bootstrap import build_colab_settings
     out = build_colab_settings({
