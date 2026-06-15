@@ -67,7 +67,10 @@ def get_colab_secret(name: str, *, required: bool = True) -> str:
     if not value:
         value = str(os.environ.get(name, "") or "").strip()
     if not value and required:
-        value = getpass.getpass(f"{name}: ").strip()
+        raw = getpass.getpass(f"{name}: ")
+        if isinstance(raw, dict):
+            raw = raw.get("value") or raw.get("secret") or raw.get("token") or ""
+        value = str(raw or "").strip()
     return value
 
 

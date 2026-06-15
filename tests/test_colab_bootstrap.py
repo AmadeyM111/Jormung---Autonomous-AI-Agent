@@ -141,6 +141,12 @@ def test_get_colab_secret_optional_returns_empty_without_prompt(monkeypatch):
     # required=False must never block on getpass when the secret is absent.
     assert get_colab_secret("OUROBOROS_TEST_ABSENT_KEY", required=False) == ""
 
+def test_get_colab_secret_coerces_non_string_prompt_value(monkeypatch):
+    import ouroboros.colab_bootstrap as bootstrap
+    monkeypatch.delenv("OUROBOROS_TEST_PROMPT_KEY", raising=False)
+    monkeypatch.setattr(bootstrap.getpass, "getpass", lambda prompt: {"value": "  abc123  "})
+    assert bootstrap.get_colab_secret("OUROBOROS_TEST_PROMPT_KEY") == "abc123"
+
 def test_collect_colab_secrets_prompts_for_groq_by_default(monkeypatch):
     import ouroboros.colab_bootstrap as bootstrap
     prompts = []
