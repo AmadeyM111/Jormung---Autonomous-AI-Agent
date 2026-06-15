@@ -135,8 +135,9 @@ def test_ensure_telegram_bridge_live_installs_enables_and_sets_full_access():
         return 200, {"ok": True}
     status = ensure_telegram_bridge_live(settings={"TELEGRAM_BOT_TOKEN": "x"}, request=fake_request, timeout=5)
     assert status["ok"] is True and status["command_mode_ok"] is True
-    assert status["steps"] == ["ready", "installed", "enabled", "command_mode:full_access"]
+    assert status["steps"] == ["ready", "installed", "reviewed", "enabled", "command_mode:full_access"]
     triples = [(m, p, b) for (m, p, b, t) in calls]
+    assert ("POST", "/api/skills/telegram-bridge/review", None) in triples
     assert ("POST", "/api/skills/telegram-bridge/toggle", {"enabled": True}) in triples
     assert ("POST", "/api/extensions/telegram-bridge/settings/save", {"TELEGRAM_COMMAND_MODE": "full_access"}) in triples
     # Auto-grant must NOT be force-POSTed; it is governed by the persisted setting.

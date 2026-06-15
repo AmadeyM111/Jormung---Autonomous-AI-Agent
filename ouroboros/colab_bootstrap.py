@@ -378,21 +378,21 @@ def ensure_telegram_bridge_live(
         return status
     status["steps"].append("already_installed" if already else "installed")
 
-    # 3b. The already-installed path does NOT re-run install-time review/grants,
-    #     so a Drive-persisted bridge whose review/grants state is missing or
-    #     stale (e.g. an interrupted earlier session) would fail to enable below.
-    #     Re-run review (auto-grant is on) to guarantee the enable precondition.
-    if already:
-        try:
-            _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
-        except Exception as exc:
-            status["error"] = f"re-review request failed: {exc}"
-            return status
-        rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
-        if rerr:
-            status["error"] = f"re-review failed: {rerr}"
-            return status
-        status["steps"].append("reviewed")
+    # 3. Install can return before the executable-review state is fresh enough
+    #    for enable, and already-installed Drive state can be stale. Always run
+    #    an explicit review here; auto-grant is governed by persisted settings.
+    try:
+        _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
+    except Exception as exc:
+        prefix = "re-review" if already else "review"
+        status["error"] = f"{prefix} request failed: {exc}"
+        return status
+    rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+    if rerr:
+        prefix = "re-review" if already else "review"
+        status["error"] = f"{prefix} failed: {rerr}"
+        return status
+    status["steps"].append("reviewed")
 
     # 4. Enable (gateway enforces fresh executable review + all grants).
     try:
