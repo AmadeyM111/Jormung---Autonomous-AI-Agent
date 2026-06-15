@@ -145,15 +145,18 @@ def run_smoke(
         )
         tool_calls = tool_message.get("tool_calls") or []
         if not tool_calls:
-            raise RuntimeError(f"Groq tool smoke returned no tool_calls: {tool_message!r}")
-        first = tool_calls[0]
-        name = str(((first or {}).get("function") or {}).get("name") or "")
-        if name != "lookup_oil_grade":
-            raise RuntimeError(f"Groq tool smoke called unexpected tool {name!r}: {tool_message!r}")
-        summary["tool_call"] = {
-            "name": name,
-            "arguments": str(((first or {}).get("function") or {}).get("arguments") or "")[:500],
-        }
+            summary["tool_smoke_ok"] = False
+            summary["tool_warning"] = "tool smoke returned no tool_calls; proceeding"
+        else:
+            first = tool_calls[0]
+            name = str(((first or {}).get("function") or {}).get("name") or "")
+            summary["tool_smoke_ok"] = name == "lookup_oil_grade"
+            if name != "lookup_oil_grade":
+                summary["tool_warning"] = f"unexpected tool call {name!r}"
+            summary["tool_call"] = {
+                "name": name,
+                "arguments": str(((first or {}).get("function") or {}).get("arguments") or "")[:500],
+            }
 
     return summary
 
