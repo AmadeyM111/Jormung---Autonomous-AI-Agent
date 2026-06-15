@@ -4,10 +4,6 @@ import pathlib
 import subprocess
 import sys
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 token = os.getenv("TELEGRAM_BOT_TOKEN")
 print("TELEGRAM_BOT_TOKEN configured:", bool(token))
 

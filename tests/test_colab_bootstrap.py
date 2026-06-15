@@ -59,7 +59,10 @@ def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib
     source = pathlib.Path(__file__).resolve().parents[1].joinpath("notebooks", "colab_quickstart.py").read_text(encoding="utf-8")
     assert "clone_or_update_repo" in source
-    assert source.index("clone_or_update_repo(REPO_DIR)") < source.index("pip", source.index("clone_or_update_repo(REPO_DIR)"))
+    call = "clone_or_update_repo(REPO_DIR, source_url=SOURCE_URL)"
+    assert call in source
+    assert source.index(call) < source.index("pip", source.index(call))
+    assert "dotenv" not in source
 
 def test_clone_or_update_repo_fast_forwards_existing_checkout(tmp_path):
     from ouroboros.colab_bootstrap import clone_or_update_repo
