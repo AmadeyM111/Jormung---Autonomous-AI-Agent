@@ -109,3 +109,16 @@ def test_external_zero_identity_cannot_bind_owner_or_execute_on_retry(monkeypatc
     assert "owner_id" not in ctx.state
     assert "owner_external_id" not in ctx.state
     assert ctx.sent == [(0, "⚠️ Command ignored: this transport did not provide owner identity."), (0, "⚠️ Command ignored: this transport did not provide owner identity.")]
+
+def test_external_review_rejected_before_queue_when_model_unavailable(monkeypatch):
+    import server
+    import ouroboros.deep_self_review as deep_self_review
+    import supervisor.message_bus as message_bus
+    bridge = Bridge([{"chat": {"id": 42}, "from": {"id": 7}, "text": "/review", "source": "skill:telegram-bridge"}])
+    ctx = Ctx({})
+    monkeypatch.setattr(message_bus, "log_chat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deep_self_review, "is_review_available", lambda: (False, None))
+    server._process_bridge_updates(bridge, 0, ctx)
+    assert ctx.sent == [
+        (42, "❌ Deep self-review unavailable: configure OUROBOROS_MODEL_DEEP_SELF_REVIEW and the matching provider API key.")
+    ]

@@ -262,6 +262,17 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
             continue
 
         if is_external_transport and is_slash_command:
+            if lowered == "/review" or lowered.startswith("/review "):
+                from ouroboros.deep_self_review import is_review_available
+
+                available, _review_model = is_review_available()
+                if not available:
+                    ctx.send_with_budget(
+                        chat_id,
+                        "❌ Deep self-review unavailable: configure OUROBOROS_MODEL_DEEP_SELF_REVIEW "
+                        "and the matching provider API key.",
+                    )
+                    continue
             if not external_identity_present:
                 ctx.send_with_budget(chat_id, "⚠️ Command ignored: this transport did not provide owner identity.")
                 continue
