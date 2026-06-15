@@ -262,14 +262,17 @@ def test_ensure_telegram_bridge_live_does_not_retry_non_transient_review_failure
 
 def test_ensure_telegram_bridge_live_bootstrap_reviews_official_bridge_after_quorum_failure(monkeypatch, tmp_path):
     import ouroboros.colab_bootstrap as bootstrap
+    review_attempts = 0
     calls = []
 
     def fake_request(method, path, body=None, timeout=None):
+        nonlocal review_attempts
         calls.append((method, path, body))
         if path == "/api/health":
             return 200, {}
-        if path == "/api/marketplace/ouroboroshub/install":
-            return 200, {"ok": True}
+        if path.endswith("/review"):
+            review_attempts += 1
+            return 200, {"error": "Skill review quorum failure: fewer than 2 reviewers returned parseable findings."}
         if path.endswith("/toggle"):
             return 200, {"enabled": True}
         return 200, {}
@@ -295,6 +298,7 @@ def test_ensure_telegram_bridge_live_bootstrap_reviews_official_bridge_after_quo
     assert status["steps"] == [
         "ready",
         "installed",
+        "review_retry:1",
         "review_bootstrap_fallback",
         "enabled",
         "command_mode:full_access",
