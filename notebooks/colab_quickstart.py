@@ -4,6 +4,7 @@ import pathlib
 import socket
 import subprocess
 import sys
+import urllib.request
 
 token = os.getenv("TELEGRAM_BOT_TOKEN")
 print("TELEGRAM_BOT_TOKEN configured:", bool(token))
@@ -78,6 +79,109 @@ def _bootstrap_checkout(repo_dir: pathlib.Path, source_url: str, branch: str = "
     subprocess.run(["git", "merge", "--ff-only", f"managed/{branch}"], cwd=str(repo_dir), check=True)
 
 
+def _strip_openai_compatible_prefix(model: str) -> str:
+    text = str(model or "").strip()
+    if text.startswith("openai-compatible::"):
+        return text.removeprefix("openai-compatible::").strip()
+    return text
+
+
+def _set_openai_compatible_model(settings: dict, model: str) -> None:
+    model = _strip_openai_compatible_prefix(model)
+    qualified = f"openai-compatible::{model}"
+    for key in (
+        "OUROBOROS_MODEL",
+        "OUROBOROS_MODEL_CODE",
+        "OUROBOROS_MODEL_LIGHT",
+        "OUROBOROS_MODEL_FALLBACK",
+        "OUROBOROS_MODEL_CONSCIOUSNESS",
+    ):
+        settings[key] = qualified
+    settings["OUROBOROS_REVIEW_MODELS"] = ",".join([qualified, qualified])
+    settings["OUROBOROS_SCOPE_REVIEW_MODEL"] = qualified
+    settings["OUROBOROS_SCOPE_REVIEW_MODELS"] = qualified
+
+
+def _split_model_list(value: str) -> list[str]:
+    return [
+        item.strip()
+        for chunk in str(value or "").splitlines()
+        for item in chunk.split(",")
+        if item.strip()
+    ]
+
+
+def _fetch_groq_model_ids(api_key: str) -> set[str]:
+    if not api_key:
+        return set()
+    req = urllib.request.Request(
+        "https://api.groq.com/openai/v1/models",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:
+        print("Could not fetch Groq model list; using static fallback candidates:", exc)
+        return set()
+    models = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return set()
+    return {
+        str(item.get("id") or "").strip()
+        for item in models
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+
+
+def _groq_fallback_candidates(settings: dict, secrets: dict) -> list[str]:
+    configured = _split_model_list(
+        str(secrets.get("GROQ_FALLBACK_MODELS") or os.environ.get("GROQ_FALLBACK_MODELS") or "")
+    )
+    defaults = [
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+    ]
+    available = _fetch_groq_model_ids(str(settings.get("OPENAI_COMPATIBLE_API_KEY") or ""))
+    current = _strip_openai_compatible_prefix(str(settings.get("OUROBOROS_MODEL") or ""))
+    candidates: list[str] = []
+    for model in [*configured, *defaults]:
+        model = _strip_openai_compatible_prefix(model)
+        if not model or model == current or model in candidates:
+            continue
+        if available and model not in available:
+            continue
+        candidates.append(model)
+    return candidates
+
+
+def _run_groq_smoke(settings: dict, model: str | None = None) -> subprocess.CompletedProcess[str]:
+    smoke_env = os.environ.copy()
+    for key in (
+        "OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_BASE_URL",
+        "OPENAI_COMPATIBLE_CONTEXT_LENGTH",
+        "OPENAI_COMPATIBLE_MAX_TOKENS",
+        "OUROBOROS_MODEL",
+    ):
+        value = settings.get(key)
+        if value not in (None, ""):
+            smoke_env[key] = str(value)
+    command = [sys.executable, "-m", "ouroboros.groq_api_smoke"]
+    if model:
+        command.extend(["--model", _strip_openai_compatible_prefix(model)])
+        smoke_env["OUROBOROS_MODEL"] = f"openai-compatible::{_strip_openai_compatible_prefix(model)}"
+    return subprocess.run(
+        command,
+        env=smoke_env,
+        text=True,
+        capture_output=True,
+    )
+
+
 _bootstrap_checkout(REPO_DIR, SOURCE_URL)
 
 os.chdir(REPO_DIR)
@@ -139,29 +243,45 @@ print("Settings:", settings_path)
 # %%
 if settings.get("OPENAI_COMPATIBLE_BASE_URL") == "https://api.groq.com/openai/v1":
     print("Running Groq smoke test...")
-    smoke_env = os.environ.copy()
-    for key in (
-        "OPENAI_COMPATIBLE_API_KEY",
-        "OPENAI_COMPATIBLE_BASE_URL",
-        "OPENAI_COMPATIBLE_CONTEXT_LENGTH",
-        "OPENAI_COMPATIBLE_MAX_TOKENS",
-        "OUROBOROS_MODEL",
-    ):
-        value = settings.get(key)
-        if value not in (None, ""):
-            smoke_env[key] = str(value)
-    smoke = subprocess.run(
-        [sys.executable, "-m", "ouroboros.groq_api_smoke"],
-        env=smoke_env,
-        text=True,
-        capture_output=True,
-    )
+    smoke = _run_groq_smoke(settings)
     if smoke.stdout:
         print(smoke.stdout)
     if smoke.returncode != 0:
-        if smoke.stderr:
-            print(smoke.stderr)
-        raise RuntimeError(f"Groq smoke test failed with exit code {smoke.returncode}")
+        combined_smoke_output = "\n".join(part for part in (smoke.stdout, smoke.stderr) if part)
+        project_blocked = (
+            "blocked at the project level" in combined_smoke_output
+            or "PermissionDeniedError" in combined_smoke_output
+        )
+        fallback_ok = False
+        if project_blocked:
+            print(
+                "Groq project blocked the selected model. "
+                "Trying fallback chat models; override with GROQ_FALLBACK_MODELS if needed."
+            )
+            for fallback_model in _groq_fallback_candidates(settings, secrets):
+                print(f"Trying Groq fallback model: {fallback_model}")
+                fallback_smoke = _run_groq_smoke(settings, fallback_model)
+                if fallback_smoke.stdout:
+                    print(fallback_smoke.stdout)
+                if fallback_smoke.returncode == 0:
+                    print(f"Using Groq fallback model: {fallback_model}")
+                    _set_openai_compatible_model(settings, fallback_model)
+                    settings_path = write_colab_settings(DATA_DIR, settings)
+                    export_colab_env(REPO_DIR, DATA_DIR, settings_path)
+                    apply_settings_to_env(settings)
+                    fallback_ok = True
+                    break
+                if fallback_smoke.stderr:
+                    print(fallback_smoke.stderr)
+        if not fallback_ok:
+            if smoke.stderr:
+                print(smoke.stderr)
+            if project_blocked:
+                print(
+                    "Fix in Groq Console: enable the blocked model in Project -> Limits, "
+                    "or set GROQ_MODEL / GROQ_FALLBACK_MODELS to a model enabled for this project."
+                )
+            raise RuntimeError(f"Groq smoke test failed with exit code {smoke.returncode}")
 
 # %%
 server_log_path = DATA_DIR / "logs" / "colab_server.log"

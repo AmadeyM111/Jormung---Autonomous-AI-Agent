@@ -103,6 +103,7 @@ def collect_colab_secrets() -> Dict[str, str]:
         out[key] = get_colab_secret(key, required=False)
     out["OPENAI_COMPATIBLE_BASE_URL"] = get_colab_secret("OPENAI_COMPATIBLE_BASE_URL", required=False)
     out["GROQ_MODEL"] = get_colab_secret("GROQ_MODEL", required=False)
+    out["GROQ_FALLBACK_MODELS"] = get_colab_secret("GROQ_FALLBACK_MODELS", required=False)
     out["GROQ_CONTEXT_LENGTH"] = get_colab_secret("GROQ_CONTEXT_LENGTH", required=False)
     out["GROQ_MAX_TOKENS"] = get_colab_secret("GROQ_MAX_TOKENS", required=False)
     if not any(out.get(key) for key in provider_keys):

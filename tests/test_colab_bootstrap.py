@@ -90,7 +90,11 @@ def test_quickstart_runs_groq_smoke_before_server():
     source = pathlib.Path(__file__).resolve().parents[1].joinpath("notebooks", "colab_quickstart.py").read_text(encoding="utf-8")
     assert "ouroboros.groq_api_smoke" in source
     assert "Running Groq smoke test..." in source
-    assert source.index("apply_settings_to_env(settings)") < source.index("ouroboros.groq_api_smoke")
+    assert "blocked at the project level" in source
+    assert "GROQ_FALLBACK_MODELS" in source
+    assert "llama-3.1-8b-instant" in source
+    assert "Using Groq fallback model:" in source
+    assert source.index("apply_settings_to_env(settings)") < source.index("smoke = _run_groq_smoke(settings)")
     assert "smoke_env" in source
     assert "OPENAI_COMPATIBLE_API_KEY" in source
     assert "capture_output=True" in source
@@ -167,6 +171,7 @@ def test_collect_colab_secrets_prompts_for_groq_by_default(monkeypatch):
 
     assert secrets["GROQ_API_KEY"] == "gsk_test_key_1234567890"
     assert ("GROQ_API_KEY", True) in prompts
+    assert ("GROQ_FALLBACK_MODELS", False) in prompts
     assert ("OPENROUTER_API_KEY", True) not in prompts
 
 def test_ensure_telegram_bridge_live_installs_enables_and_sets_full_access():
