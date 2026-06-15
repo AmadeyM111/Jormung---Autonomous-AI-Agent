@@ -83,6 +83,11 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert source.index("ouroboros.groq_api_smoke") < source.index("server = subprocess.Popen")
     assert "colab_server.log" in source
     assert "timeout=600.0" in source
+    assert "SERVER_PORT = _free_port(8765)" in source
+    assert "HOST_SERVICE_PORT = _free_port(8767, used={SERVER_PORT})" in source
+    assert "settings[\"OUROBOROS_HOST_SERVICE_PORT\"] = HOST_SERVICE_PORT" in source
+    assert "server_command(REPO_DIR, port=SERVER_PORT)" in source
+    assert "ensure_telegram_bridge_live(settings=settings, port=SERVER_PORT" in source
 
 def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib

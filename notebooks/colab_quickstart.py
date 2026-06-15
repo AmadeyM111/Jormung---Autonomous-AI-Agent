@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import socket
 import subprocess
 import sys
 
@@ -36,6 +37,21 @@ SOURCE_URL = os.environ.get(
 )
 REPO_DIR = pathlib.Path("/content/ouroboros_repo")
 os.chdir("/content")
+
+
+def _free_port(preferred: int, used: set[int] | None = None) -> int:
+    used = used or set()
+    for port in [preferred, *range(preferred + 1, preferred + 50)]:
+        if port in used:
+            continue
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError(f"No free loopback port found near {preferred}")
 
 
 def _bootstrap_checkout(repo_dir: pathlib.Path, source_url: str, branch: str = "ouroboros") -> None:
@@ -106,6 +122,9 @@ settings = build_colab_settings(
     max_workers=int(os.environ.get("OUROBOROS_MAX_WORKERS", "1")),
     existing=_existing_settings,
 )
+SERVER_PORT = _free_port(8765)
+HOST_SERVICE_PORT = _free_port(8767, used={SERVER_PORT})
+settings["OUROBOROS_HOST_SERVICE_PORT"] = HOST_SERVICE_PORT
 # GitHub persistence is optional: a personal fork is configured only when a token
 # is present, otherwise the prototype still runs (without remote self-persistence).
 origin_result = configure_colab_personal_origin(REPO_DIR, DATA_DIR, settings)
@@ -149,17 +168,19 @@ server_log_path = DATA_DIR / "logs" / "colab_server.log"
 server_log_path.parent.mkdir(parents=True, exist_ok=True)
 server_log_handle = server_log_path.open("a", encoding="utf-8")
 server = subprocess.Popen(
-    server_command(REPO_DIR),
+    server_command(REPO_DIR, port=SERVER_PORT),
     cwd=str(REPO_DIR),
     env=os.environ.copy(),
     stdout=server_log_handle,
     stderr=subprocess.STDOUT,
 )
 print("Ouroboros server PID:", server.pid)
+print("Ouroboros gateway port:", SERVER_PORT)
+print("Ouroboros host service port:", HOST_SERVICE_PORT)
 print("Ouroboros server log:", server_log_path)
 
 # Install + review + grant + enable the Telegram bridge over the loopback gateway.
-bridge_status = ensure_telegram_bridge_live(settings=settings, timeout=600.0)
+bridge_status = ensure_telegram_bridge_live(settings=settings, port=SERVER_PORT, timeout=600.0)
 print("Telegram bridge:", bridge_status)
 if bridge_status.get("ok") and bridge_status.get("command_mode_ok"):
     print("Message your Telegram bot now. Your first owner slash command (e.g. /status) registers your chat and asks you to send it once more;")
