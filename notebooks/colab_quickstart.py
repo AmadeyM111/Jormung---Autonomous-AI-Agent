@@ -97,7 +97,29 @@ print("Settings:", settings_path)
 # %%
 if settings.get("OPENAI_COMPATIBLE_BASE_URL") == "https://api.groq.com/openai/v1":
     print("Running Groq OSS smoke test...")
-    subprocess.run([sys.executable, "-m", "ouroboros.groq_api_smoke"], check=True)
+    smoke_env = os.environ.copy()
+    for key in (
+        "OPENAI_COMPATIBLE_API_KEY",
+        "OPENAI_COMPATIBLE_BASE_URL",
+        "OPENAI_COMPATIBLE_CONTEXT_LENGTH",
+        "OPENAI_COMPATIBLE_MAX_TOKENS",
+        "OUROBOROS_MODEL",
+    ):
+        value = settings.get(key)
+        if value not in (None, ""):
+            smoke_env[key] = str(value)
+    smoke = subprocess.run(
+        [sys.executable, "-m", "ouroboros.groq_api_smoke"],
+        env=smoke_env,
+        text=True,
+        capture_output=True,
+    )
+    if smoke.stdout:
+        print(smoke.stdout)
+    if smoke.returncode != 0:
+        if smoke.stderr:
+            print(smoke.stderr)
+        raise RuntimeError(f"Groq OSS smoke test failed with exit code {smoke.returncode}")
 
 # %%
 server = subprocess.Popen(
