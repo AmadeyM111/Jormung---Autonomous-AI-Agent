@@ -35,12 +35,14 @@ SOURCE_URL = os.environ.get(
     "https://github.com/AmadeyM111/oil-ai-agent.git",
 )
 REPO_DIR = pathlib.Path("/content/ouroboros_repo")
+os.chdir("/content")
 
 
 def _bootstrap_checkout(repo_dir: pathlib.Path, source_url: str, branch: str = "ouroboros") -> None:
     if not (repo_dir / ".git").exists():
         subprocess.run(
             ["git", "clone", "--branch", branch, source_url, str(repo_dir)],
+            cwd="/content",
             check=True,
         )
         return

@@ -86,6 +86,8 @@ def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib
     source = pathlib.Path(__file__).resolve().parents[1].joinpath("notebooks", "colab_quickstart.py").read_text(encoding="utf-8")
     assert "clone_or_update_repo" in source
+    assert 'os.chdir("/content")' in source
+    assert 'cwd="/content"' in source
     assert source.index("_bootstrap_checkout(REPO_DIR, SOURCE_URL)") < source.index("from ouroboros.colab_bootstrap import")
     call = "clone_or_update_repo(REPO_DIR, source_url=SOURCE_URL)"
     assert call in source
