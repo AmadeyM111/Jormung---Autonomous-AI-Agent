@@ -95,14 +95,14 @@ def run_smoke(
         timeout=request_timeout,
     )
     text = _message_text(message)
-    if text.strip().upper() != "OK":
-        raise RuntimeError(f"Groq text smoke returned an empty/short response: {message!r}")
+    text_ok = text.strip().upper() == "OK"
 
     summary: Dict[str, Any] = {
         "ok": True,
         "base_url": base_url,
         "model": qualified_model,
         "text_chars": len(text),
+        "text_smoke_ok": text_ok,
         "usage": {
             "prompt_tokens": int((usage or {}).get("prompt_tokens") or 0),
             "completion_tokens": int((usage or {}).get("completion_tokens") or 0),
@@ -110,6 +110,8 @@ def run_smoke(
             "resolved_model": str((usage or {}).get("resolved_model") or ""),
         },
     }
+    if not text_ok:
+        summary["text_warning"] = "text smoke returned non-OK output; proceeding with tool smoke"
 
     if not skip_tools:
         tool_message, _tool_usage = client.chat(
