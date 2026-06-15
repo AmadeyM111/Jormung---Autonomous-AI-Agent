@@ -87,7 +87,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "HOST_SERVICE_PORT = _free_port(8767, used={SERVER_PORT})" in source
     assert "settings[\"OUROBOROS_HOST_SERVICE_PORT\"] = HOST_SERVICE_PORT" in source
     assert "server_command(REPO_DIR, port=SERVER_PORT)" in source
-    assert "ensure_telegram_bridge_live(settings=settings, port=SERVER_PORT" in source
+    assert "ensure_telegram_bridge_live(settings=settings, data_dir=DATA_DIR, port=SERVER_PORT" in source
 
 def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib
@@ -244,6 +244,53 @@ def test_ensure_telegram_bridge_live_does_not_retry_non_transient_review_failure
     assert "review failed" in status["error"]
     assert review_attempts == 1
     assert sleeps == []
+
+def test_ensure_telegram_bridge_live_bootstrap_reviews_official_bridge_after_quorum_failure(monkeypatch, tmp_path):
+    import ouroboros.colab_bootstrap as bootstrap
+    review_attempts = 0
+    calls = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        nonlocal review_attempts
+        calls.append((method, path, body))
+        if path == "/api/health":
+            return 200, {}
+        if path.endswith("/review"):
+            review_attempts += 1
+            return 200, {"error": "Skill review quorum failure: fewer than 2 reviewers returned parseable findings."}
+        if path.endswith("/toggle"):
+            return 200, {"enabled": True}
+        return 200, {}
+
+    fallback_calls = []
+
+    def fake_fallback(data_dir, slug):
+        fallback_calls.append((data_dir, slug))
+        return {"ok": True, "review_profile": "official_hub", "auto_granted_keys": ["TELEGRAM_BOT_TOKEN"]}
+
+    monkeypatch.setattr(bootstrap, "_bootstrap_review_official_telegram_bridge", fake_fallback)
+    status = bootstrap.ensure_telegram_bridge_live(
+        settings={"TELEGRAM_BOT_TOKEN": "x"},
+        data_dir=tmp_path,
+        request=fake_request,
+        timeout=5,
+        review_retries=1,
+        review_retry_delay=75,
+        sleep=lambda _seconds: None,
+    )
+
+    assert status["ok"] is True
+    assert status["steps"] == [
+        "ready",
+        "installed",
+        "review_retry:1",
+        "review_bootstrap_fallback",
+        "enabled",
+        "command_mode:full_access",
+    ]
+    assert fallback_calls == [(tmp_path, "telegram-bridge")]
+    assert status["bootstrap_review"]["auto_granted_keys"] == ["TELEGRAM_BOT_TOKEN"]
+    assert ("POST", "/api/skills/telegram-bridge/toggle", {"enabled": True}) in calls
 
 def test_ensure_telegram_bridge_live_handles_already_installed_and_warns_missing_token():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
