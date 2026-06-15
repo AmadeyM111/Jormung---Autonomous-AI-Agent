@@ -53,6 +53,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     import pathlib
     source = pathlib.Path(__file__).resolve().parents[1].joinpath("notebooks", "colab_quickstart.py").read_text(encoding="utf-8")
     assert "ouroboros.groq_api_smoke" in source
+    assert source.index("apply_settings_to_env(settings)") < source.index("ouroboros.groq_api_smoke")
     assert source.index("ouroboros.groq_api_smoke") < source.index("server = subprocess.Popen")
 
 def test_quickstart_uses_clone_or_update_repo_helper():

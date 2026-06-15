@@ -56,6 +56,7 @@ from ouroboros.colab_bootstrap import (
     server_command,
     write_colab_settings,
 )
+from ouroboros.config import apply_settings_to_env
 
 # Canonical update: establish the `managed` remote role and fast-forward.
 clone_or_update_repo(REPO_DIR, source_url=SOURCE_URL)
@@ -87,6 +88,7 @@ settings = build_colab_settings(
 origin_result = configure_colab_personal_origin(REPO_DIR, DATA_DIR, settings)
 settings_path = write_colab_settings(DATA_DIR, settings)
 export_colab_env(REPO_DIR, DATA_DIR, settings_path)
+apply_settings_to_env(settings)
 
 print("Secrets configured:", masked_secret_status(settings))
 print("Personal origin:", origin_result)
