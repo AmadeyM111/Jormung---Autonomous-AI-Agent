@@ -1,29 +1,42 @@
-# %% [markdown]
-# # Ouroboros Colab Quickstart
-#
-# Runs full source-mode Ouroboros in Google Colab without the desktop UI and
-# brings up the Telegram control bridge automatically.
-
-# %%
 import json
 import os
 import pathlib
 import subprocess
 import sys
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+token = os.getenv("TELEGRAM_BOT_TOKEN")
+print("TELEGRAM_BOT_TOKEN configured:", bool(token))
+
 try:
     from google.colab import drive  # type: ignore
-except Exception as exc:  # pragma: no cover - only meaningful in Colab
-    raise RuntimeError("This quickstart is intended for Google Colab.") from exc
+except Exception as exc:
+    raise RuntimeError(
+        "notebooks/colab_quickstart.py must be run inside Google Colab. "
+        "For local startup, run: python -m ouroboros.cli server --host 127.0.0.1 --port 8765 --no-ui"
+    ) from exc
+
+if not pathlib.Path("/content").is_dir() or not os.access("/content", os.W_OK):
+    raise RuntimeError(
+        "Google Colab writable /content is not available. "
+        "Open this script/notebook in Colab instead of running it locally."
+    )
 
 drive.mount("/content/drive")
 
 # Minimal bootstrap clone so `ouroboros.colab_bootstrap` becomes importable.
 # Remote roles and fast-forward updates are handled by clone_or_update_repo below.
+SOURCE_URL = os.environ.get(
+    "OUROBOROS_COLAB_REPO_URL",
+    "https://github.com/AmadeyM111/oil-ai-agent.git",
+)
 REPO_DIR = pathlib.Path("/content/ouroboros_repo")
 if not (REPO_DIR / ".git").exists():
     subprocess.run(
-        ["git", "clone", "--branch", "ouroboros", "https://github.com/razzant/ouroboros.git", str(REPO_DIR)],
+        ["git", "clone", "--branch", "ouroboros", SOURCE_URL, str(REPO_DIR)],
         check=True,
     )
 
@@ -44,7 +57,7 @@ from ouroboros.colab_bootstrap import (
 )
 
 # Canonical update: establish the `managed` remote role and fast-forward.
-clone_or_update_repo(REPO_DIR)
+clone_or_update_repo(REPO_DIR, source_url=SOURCE_URL)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)
 
 APP_ROOT = pathlib.Path("/content/drive/MyDrive/Ouroboros")
