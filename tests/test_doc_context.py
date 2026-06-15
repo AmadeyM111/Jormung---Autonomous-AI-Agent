@@ -170,6 +170,27 @@ def test_low_mode_development_full_for_direct_chat_tasks_unless_explicitly_disab
     assert "DEVELOPMENT.md" in pure_chat_text  # but named in the on-demand pointer
 
 
+def test_minimal_context_omits_full_governance_and_memory(monkeypatch):
+    from ouroboros.context import build_llm_messages
+
+    tmpdir = pathlib.Path(tempfile.mkdtemp())
+    env, memory = _make_env_and_memory(tmpdir)
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+
+    messages, cap_info = build_llm_messages(
+        env=env,
+        memory=memory,
+        task={"id": "chat-1", "type": "task", "text": "Привет"},
+    )
+
+    text = str(messages[0]["content"])
+    assert "minimal-context mode" in text
+    assert "BIBLE.md" not in text
+    assert "ARCHITECTURE.md" not in text
+    assert "Scratchpad" not in text
+    assert cap_info["trimmed_sections"] == ["minimal_context"]
+
+
 def test_version_regexes_match_runtime_formats():
     badge = '[![Version 5.5.0](https://img.shields.io/badge/version-5.5.0-green.svg)](VERSION)'
     assert re.search(r'version[- ](\d+\.\d+\.\d+)', badge, re.IGNORECASE)

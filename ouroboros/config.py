@@ -113,6 +113,10 @@ SETTINGS_DEFAULTS = {
     # Cognitive-horizon knob (BIBLE P1): the agent cannot lower it (owner-only),
     # and it never changes model / reasoning-effort / output-token budgets.
     "OUROBOROS_CONTEXT_MODE": "max",
+    # Extreme provider-budget mode for hosted OSS APIs with tiny TPM limits.
+    # It keeps the server/Telegram bridge usable for plain chat by omitting the
+    # normal governance/memory/tool payload from foreground LLM requests.
+    "OUROBOROS_MINIMAL_CONTEXT": "false",
     # Optional extra user-managed skills checkout; Ouroboros never clones/pulls it.
     "OUROBOROS_SKILLS_REPO_PATH": "",
     "OUROBOROS_CLAWHUB_REGISTRY_URL": "https://clawhub.ai/api/v1",
@@ -872,7 +876,7 @@ def apply_settings_to_env(settings: dict) -> None:
         "OUROBOROS_TASK_REVIEW_MODE",
         "OUROBOROS_SERVICE_LOG_RETENTION_DAYS",
         # Runtime-mode, context-mode, and skills-repo plumbing.
-        "OUROBOROS_RUNTIME_MODE", "OUROBOROS_CONTEXT_MODE", "OUROBOROS_SKILLS_REPO_PATH",
+        "OUROBOROS_RUNTIME_MODE", "OUROBOROS_CONTEXT_MODE", "OUROBOROS_MINIMAL_CONTEXT", "OUROBOROS_SKILLS_REPO_PATH",
         "OUROBOROS_HOST_SERVICE_PORT",
         # ClawHub marketplace registry URL.
         "OUROBOROS_CLAWHUB_REGISTRY_URL",

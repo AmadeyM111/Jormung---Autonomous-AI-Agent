@@ -30,6 +30,11 @@ log = logging.getLogger(__name__)
 _LARGE_CONTEXT_SECTION_CHARS = LARGE_CONTEXT_SECTION_CHARS
 
 
+def minimal_context_enabled() -> bool:
+    raw = str(os.environ.get("OUROBOROS_MINIMAL_CONTEXT", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _chat_log_signature_matches(expected: Any, current: Dict[str, Any]) -> bool:
     if not isinstance(expected, dict) or not current:
         return False
@@ -904,6 +909,28 @@ def build_llm_messages(
     state_json = safe_read(env.drive_path("state/state.json"), fallback="{}")
 
     memory.ensure_files()
+    if minimal_context_enabled():
+        identity = memory.load_identity().strip()
+        identity_line = ""
+        if identity:
+            identity_line = "\nIdentity note: " + re.sub(r"\s+", " ", identity)[:240]
+        system_text = (
+            "You are Ouroboros running in minimal-context mode because the current "
+            "provider has a very small TPM quota. Answer the owner directly and "
+            "concisely. Do not claim access to full memory, repo context, tools, "
+            "or live web data unless the user provides it in the message."
+            + identity_line
+        )
+        messages = [
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": build_user_content(task)},
+        ]
+        return messages, {
+            "estimated_tokens_before": estimate_tokens(system_text) + estimate_tokens(str(task.get("text") or "")),
+            "estimated_tokens_after": estimate_tokens(system_text) + estimate_tokens(str(task.get("text") or "")),
+            "soft_cap_tokens": soft_cap_tokens,
+            "trimmed_sections": ["minimal_context"],
+        }
 
     # Reference-doc layout (ARCHITECTURE / DEVELOPMENT / README / CHECKLISTS) is
     # owned by context_layout per the low/max doc matrix. SYSTEM + BIBLE are

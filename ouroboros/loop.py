@@ -17,7 +17,7 @@ from ouroboros.outcomes import turn_has_reviewable_effects
 from ouroboros.observability import new_call_id, persist_call
 from ouroboros.tool_policy import initial_tool_schemas, list_non_core_tools
 from ouroboros.tools.registry import ToolRegistry
-from ouroboros.context import build_user_content
+from ouroboros.context import build_user_content, minimal_context_enabled
 from ouroboros.context_budget import EMERGENCY_COMPACTION_CHARS, LOW_EMERGENCY_COMPACTION_CHARS
 from ouroboros.context_compaction import compact_tool_history_llm
 from ouroboros.utils import estimate_tokens
@@ -908,8 +908,12 @@ def run_llm_loop(
     from ouroboros.tools import tool_discovery as _td
     _td.set_registry(tools)
 
-    tool_schemas = initial_tool_schemas(tools)
-    tool_schemas, _enabled_extra_tools = _setup_dynamic_tools(tools, tool_schemas, messages)
+    if minimal_context_enabled():
+        tool_schemas = None
+        _enabled_extra_tools = {}
+    else:
+        tool_schemas = initial_tool_schemas(tools)
+        tool_schemas, _enabled_extra_tools = _setup_dynamic_tools(tools, tool_schemas, messages)
 
     tools._ctx.event_queue = event_queue
     tools._ctx.task_id = task_id

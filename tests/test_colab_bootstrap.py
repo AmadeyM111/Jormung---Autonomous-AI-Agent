@@ -39,6 +39,8 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     assert out["OPENAI_COMPATIBLE_BASE_URL"] == "https://api.groq.com/openai/v1"
     assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "8192"
     assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "64"
+    assert out["OUROBOROS_MINIMAL_CONTEXT"] == "true"
+    assert out["OUROBOROS_EFFORT_TASK"] == "low"
     assert out["OUROBOROS_MODEL"] == expected_model
     assert out["OUROBOROS_MODEL_CODE"] == expected_model
     assert out["OUROBOROS_REVIEW_MODELS"] == f"{expected_model},{expected_model}"
