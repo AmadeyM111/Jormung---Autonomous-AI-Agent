@@ -458,12 +458,17 @@ def ensure_telegram_bridge_live(
     # keys; if an owner turned it off, the enable step below surfaces the missing
     # grants instead of silently overriding the owner's policy.
 
-    # 2. Install from the live catalog. This synchronously runs tri-model skill
-    #    review, which can take minutes, so use a review-scale timeout rather
-    #    than the default 60s (otherwise a slow review looks like an install
-    #    failure even though the server is still working).
+    use_bootstrap_review = slug == "telegram-bridge" and data_dir is not None
+
+    # 2. Install from the live catalog. For telegram-bridge in Colab we can
+    #    skip server-side tri-model review: the bootstrap already has a
+    #    hash-verified official-hub fallback, and waiting for the full review
+    #    just burns time on the Groq on-demand path.
     try:
-        _code, payload = call("POST", "/api/marketplace/ouroboroshub/install", {"slug": slug}, timeout=1800.0)
+        install_body = {"slug": slug}
+        if use_bootstrap_review:
+            install_body["auto_review"] = False
+        _code, payload = call("POST", "/api/marketplace/ouroboroshub/install", install_body, timeout=1800.0)
     except Exception as exc:
         status["error"] = f"install request failed: {exc}"
         return status
@@ -474,40 +479,49 @@ def ensure_telegram_bridge_live(
         return status
     status["steps"].append("already_installed" if already else "installed")
 
-    # 3. Install can return before the executable-review state is fresh enough
-    #    for enable, and already-installed Drive state can be stale. Always run
-    #    an explicit review here; auto-grant is governed by persisted settings.
-    prefix = "re-review" if already else "review"
-    max_attempts = max(1, int(review_retries) + 1)
-    for attempt in range(max_attempts):
-        try:
-            _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
-        except Exception as exc:
-            rerr = str(exc)
+    # 3. Review. Telegram bridge uses the narrow official-hub bootstrap path
+    #    instead of the slow tri-model review cycle in Colab.
+    if use_bootstrap_review:
+        fallback = _bootstrap_review_official_telegram_bridge(data_dir, slug)
+        if fallback.get("ok"):
+            status["steps"].append("review_bootstrap_fallback")
+            status["bootstrap_review"] = fallback
+        else:
+            status["bootstrap_review"] = fallback
+            status["error"] = f"review failed: {fallback.get('error') or 'bootstrap review unavailable'}"
+            return status
+    else:
+        prefix = "re-review" if already else "review"
+        max_attempts = max(1, int(review_retries) + 1)
+        for attempt in range(max_attempts):
+            try:
+                _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
+            except Exception as exc:
+                rerr = str(exc)
+                if attempt < max_attempts - 1 and _retryable_review_error(rerr):
+                    status["steps"].append(f"review_retry:{attempt + 1}")
+                    sleeper(review_retry_delay)
+                    continue
+                status["error"] = f"{prefix} request failed: {exc}"
+                return status
+
+            rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+            if not rerr:
+                status["steps"].append("reviewed")
+                break
             if attempt < max_attempts - 1 and _retryable_review_error(rerr):
                 status["steps"].append(f"review_retry:{attempt + 1}")
                 sleeper(review_retry_delay)
                 continue
-            status["error"] = f"{prefix} request failed: {exc}"
-            return status
-
-        rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
-        if not rerr:
-            status["steps"].append("reviewed")
-            break
-        if attempt < max_attempts - 1 and _retryable_review_error(rerr):
-            status["steps"].append(f"review_retry:{attempt + 1}")
-            sleeper(review_retry_delay)
-            continue
-        if _retryable_review_error(rerr):
-            fallback = _bootstrap_review_official_telegram_bridge(data_dir, slug)
-            if fallback.get("ok"):
-                status["steps"].append("review_bootstrap_fallback")
+            if _retryable_review_error(rerr):
+                fallback = _bootstrap_review_official_telegram_bridge(data_dir, slug)
+                if fallback.get("ok"):
+                    status["steps"].append("review_bootstrap_fallback")
+                    status["bootstrap_review"] = fallback
+                    break
                 status["bootstrap_review"] = fallback
-                break
-            status["bootstrap_review"] = fallback
-        status["error"] = f"{prefix} failed: {rerr}"
-        return status
+            status["error"] = f"{prefix} failed: {rerr}"
+            return status
 
     # 4. Enable (gateway enforces fresh executable review + all grants).
     try:
