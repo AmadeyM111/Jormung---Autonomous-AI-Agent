@@ -35,11 +35,32 @@ SOURCE_URL = os.environ.get(
     "https://github.com/AmadeyM111/oil-ai-agent.git",
 )
 REPO_DIR = pathlib.Path("/content/ouroboros_repo")
-if not (REPO_DIR / ".git").exists():
-    subprocess.run(
-        ["git", "clone", "--branch", "ouroboros", SOURCE_URL, str(REPO_DIR)],
-        check=True,
-    )
+
+
+def _bootstrap_checkout(repo_dir: pathlib.Path, source_url: str, branch: str = "ouroboros") -> None:
+    if not (repo_dir / ".git").exists():
+        subprocess.run(
+            ["git", "clone", "--branch", branch, source_url, str(repo_dir)],
+            check=True,
+        )
+        return
+    remotes = subprocess.run(
+        ["git", "remote"],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    if "managed" in remotes:
+        subprocess.run(["git", "remote", "set-url", "managed", source_url], cwd=str(repo_dir), check=False)
+    else:
+        subprocess.run(["git", "remote", "add", "managed", source_url], cwd=str(repo_dir), check=False)
+    subprocess.run(["git", "fetch", "managed", branch], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "checkout", branch], cwd=str(repo_dir), check=True)
+    subprocess.run(["git", "merge", "--ff-only", f"managed/{branch}"], cwd=str(repo_dir), check=True)
+
+
+_bootstrap_checkout(REPO_DIR, SOURCE_URL)
 
 os.chdir(REPO_DIR)
 sys.path.insert(0, str(REPO_DIR))
