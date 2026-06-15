@@ -57,8 +57,10 @@ def test_build_colab_settings_groq_profile_defaults_to_low_context_mode():
         "GROQ_API_KEY": "gsk_test_key_1234567890",
     }, existing={
         "OUROBOROS_CONTEXT_MODE": "max",
+        "OUROBOROS_MODEL": "openai-compatible::openai/gpt-oss-120b",
     })
     assert out["OUROBOROS_CONTEXT_MODE"] == "low"
+    assert out["OUROBOROS_MODEL"] == "openai-compatible::openai/gpt-oss-20b"
 
 def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
     from ouroboros.colab_bootstrap import build_colab_settings

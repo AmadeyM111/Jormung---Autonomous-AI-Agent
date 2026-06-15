@@ -21,7 +21,7 @@ DEFAULT_COLAB_APP_ROOT = "/content/drive/MyDrive/Ouroboros"
 DEFAULT_COLAB_REPO_DIR = "/content/ouroboros_repo"
 DEFAULT_OFFICIAL_REPO_URL = "https://github.com/razzant/ouroboros.git"
 GROQ_OPENAI_COMPATIBLE_BASE_URL = "https://api.groq.com/openai/v1"
-DEFAULT_GROQ_OSS_MODEL = "openai/gpt-oss-120b"
+DEFAULT_GROQ_OSS_MODEL = "openai/gpt-oss-20b"
 DEFAULT_GROQ_CONTEXT_LENGTH = "8192"
 DEFAULT_GROQ_MAX_TOKENS = "256"
 
@@ -140,6 +140,8 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
         else ""
     )
     model = explicit_model or existing_compatible_model or DEFAULT_GROQ_OSS_MODEL
+    if not explicit_model and existing_compatible_model == "openai/gpt-oss-120b":
+        model = DEFAULT_GROQ_OSS_MODEL
     qualified_model = f"openai-compatible::{model}"
 
     settings["OPENAI_COMPATIBLE_API_KEY"] = groq_key
