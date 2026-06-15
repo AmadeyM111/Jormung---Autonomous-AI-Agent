@@ -379,6 +379,58 @@ class LLMClient:
         return retry_payload
 
     @staticmethod
+    def _tpm_request_too_large_error(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return (
+            "tokens per minute" in text
+            and (
+                "request too large" in text
+                or "rate limit" in text
+                or "413" in text
+            )
+        )
+
+    @classmethod
+    def _retry_with_lower_completion_budget(
+        cls,
+        payload: Dict[str, Any],
+        exc: BaseException,
+    ) -> List[Dict[str, Any]]:
+        if not cls._tpm_request_too_large_error(exc):
+            return []
+
+        key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
+        current_raw = payload.get(key)
+        try:
+            current = int(current_raw)
+        except (TypeError, ValueError):
+            current = 0
+        if current <= 0:
+            return []
+
+        candidates = []
+        for next_budget in (current // 2, current // 4, 64, 32, 16):
+            next_budget = int(next_budget)
+            if next_budget <= 0 or next_budget >= current:
+                continue
+            candidates.append(next_budget)
+        seen: set[int] = set()
+        retries: List[Dict[str, Any]] = []
+        for next_budget in candidates:
+            if next_budget in seen:
+                continue
+            seen.add(next_budget)
+            retry_payload = copy.deepcopy(payload)
+            retry_payload[key] = next_budget
+            log.warning(
+                "Retrying with reduced %s=%s after TPM overage",
+                key,
+                next_budget,
+            )
+            retries.append(retry_payload)
+        return retries
+
+    @staticmethod
     def _parse_provider_model(model: str) -> Tuple[str, str]:
         model_name = str(model or "").strip()
         for prefix, provider in (
@@ -2074,6 +2126,11 @@ class LLMClient:
         try:
             return create_fn(**kwargs)
         except Exception as exc:
+            for retry_kwargs in self._retry_with_lower_completion_budget(kwargs, exc):
+                try:
+                    return create_fn(**retry_kwargs)
+                except Exception:
+                    continue
             retry_kwargs = self._retry_without_optional_sampling(kwargs, usage_model, exc)
             if retry_kwargs is not None:
                 try:
@@ -2098,6 +2155,11 @@ class LLMClient:
         try:
             return await create_fn(**kwargs)
         except Exception as exc:
+            for retry_kwargs in self._retry_with_lower_completion_budget(kwargs, exc):
+                try:
+                    return await create_fn(**retry_kwargs)
+                except Exception:
+                    continue
             retry_kwargs = self._retry_without_optional_sampling(kwargs, usage_model, exc)
             if retry_kwargs is not None:
                 try:

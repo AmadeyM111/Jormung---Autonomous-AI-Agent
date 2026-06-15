@@ -23,7 +23,7 @@ DEFAULT_OFFICIAL_REPO_URL = "https://github.com/razzant/ouroboros.git"
 GROQ_OPENAI_COMPATIBLE_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_OSS_MODEL = "openai/gpt-oss-20b"
 DEFAULT_GROQ_CONTEXT_LENGTH = "8192"
-DEFAULT_GROQ_MAX_TOKENS = "256"
+DEFAULT_GROQ_MAX_TOKENS = "64"
 
 _SECRET_KEYS = (
     "OPENROUTER_API_KEY",

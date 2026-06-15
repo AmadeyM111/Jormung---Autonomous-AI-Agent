@@ -500,6 +500,36 @@ def test_openrouter_signature_error_retries_once_with_reasoning_stripped(monkeyp
     assert "extra_body" not in calls[1]
 
 
+def test_openai_compatible_tpm_error_retries_with_lower_completion_budget():
+    from ouroboros.llm import LLMClient
+
+    client = LLMClient()
+    target = client._resolve_remote_target("openai-compatible::openai/gpt-oss-20b")
+    kwargs = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 256,
+    }
+    calls = []
+
+    class _Resp:
+        def model_dump(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    def fake_create(**call_kwargs):
+        calls.append(call_kwargs)
+        if call_kwargs["max_tokens"] > 64:
+            raise RuntimeError(
+                "Error code: 413 - {'error': {'message': 'Request too large for model openai/gpt-oss-20b in organization org_x service tier on_demand on tokens per minute (TPM): Limit 800, Requested 900'}}"
+            )
+        return _Resp()
+
+    resp = client._create_chat_completion_with_retries(fake_create, kwargs, target)
+
+    assert resp.model_dump()["choices"][0]["message"]["content"] == "ok"
+    assert [call["max_tokens"] for call in calls] == [256, 128, 64]
+
+
 def test_openrouter_gemini_preserves_message_cache_blocks_and_strips_tool_cache(monkeypatch):
     client = LLMClient()
     monkeypatch.setattr(client, "_get_supported_parameters", lambda _model_id: None)
