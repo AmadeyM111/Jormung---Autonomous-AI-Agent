@@ -10,11 +10,12 @@ from typing import Any, Dict
 
 from ouroboros.colab_bootstrap import (
     DEFAULT_GROQ_CONTEXT_LENGTH,
-    DEFAULT_GROQ_MAX_TOKENS,
     DEFAULT_GROQ_OSS_MODEL,
     GROQ_OPENAI_COMPATIBLE_BASE_URL,
 )
 from ouroboros.llm import LLMClient
+
+DEFAULT_GROQ_SMOKE_MAX_TOKENS = 128
 
 
 def _strip_prefix(model: str) -> str:
@@ -158,7 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=_default_model())
     parser.add_argument("--base-url", default=os.environ.get("OPENAI_COMPATIBLE_BASE_URL") or GROQ_OPENAI_COMPATIBLE_BASE_URL)
-    parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("GROQ_MAX_TOKENS") or os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS") or DEFAULT_GROQ_MAX_TOKENS))
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=int(os.environ.get("GROQ_SMOKE_MAX_TOKENS") or DEFAULT_GROQ_SMOKE_MAX_TOKENS),
+    )
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("GROQ_TIMEOUT_SEC") or "90"))
     parser.add_argument("--skip-tools", action="store_true")
     args = parser.parse_args(argv)
