@@ -99,6 +99,13 @@ def _has_active_evolution_transaction() -> bool:
 def _restart_current_process(host: str, port: int) -> None:
     _restart_current_process_impl(host, port, repo_dir=REPO_DIR, log=log)
 
+def _should_auto_restore_background_consciousness() -> bool:
+    try:
+        from ouroboros.config import get_context_mode
+        return get_context_mode() != "low"
+    except Exception:
+        return True
+
 from ouroboros.config import (
     SETTINGS_DEFAULTS as _SETTINGS_DEFAULTS,
     load_settings, save_settings, apply_settings_to_env as _apply_settings_to_env,
@@ -641,9 +648,13 @@ def _run_supervisor(settings: dict) -> None:
         )
 
         _bg_st = load_state()
-        if _bg_st.get("bg_consciousness_enabled"):
+        if _bg_st.get("bg_consciousness_enabled") and _should_auto_restore_background_consciousness():
             _consciousness.start()
             log.info("Background consciousness auto-restored from saved state.")
+        elif _bg_st.get("bg_consciousness_enabled"):
+            _bg_st["bg_consciousness_enabled"] = False
+            save_state(_bg_st)
+            log.info("Skipping background consciousness auto-restore in low context mode.")
 
         branch_dev, branch_stable = _runtime_branch_defaults()
         _event_ctx = types.SimpleNamespace(

@@ -201,5 +201,14 @@ class TestBackgroundConsciousnessToolScope(unittest.TestCase):
         self.assertNotIn("commit_reviewed", schema_names)
 
 
+def test_server_skips_background_auto_restore_in_low_context_mode(monkeypatch):
+    import server
+
+    monkeypatch.setattr("ouroboros.config.get_context_mode", lambda: "low")
+    assert server._should_auto_restore_background_consciousness() is False
+    monkeypatch.setattr("ouroboros.config.get_context_mode", lambda: "max")
+    assert server._should_auto_restore_background_consciousness() is True
+
+
 if __name__ == "__main__":
     unittest.main()
