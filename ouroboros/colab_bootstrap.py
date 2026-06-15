@@ -22,6 +22,8 @@ DEFAULT_COLAB_REPO_DIR = "/content/ouroboros_repo"
 DEFAULT_OFFICIAL_REPO_URL = "https://github.com/razzant/ouroboros.git"
 GROQ_OPENAI_COMPATIBLE_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_OSS_MODEL = "openai/gpt-oss-120b"
+DEFAULT_GROQ_CONTEXT_LENGTH = "8192"
+DEFAULT_GROQ_MAX_TOKENS = "1024"
 
 _SECRET_KEYS = (
     "OPENROUTER_API_KEY",
@@ -139,13 +141,11 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
     settings["OPENAI_COMPATIBLE_BASE_URL"] = GROQ_OPENAI_COMPATIBLE_BASE_URL
     settings["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] = (
         str(secrets.get("GROQ_CONTEXT_LENGTH") or "").strip()
-        or str(settings.get("OPENAI_COMPATIBLE_CONTEXT_LENGTH") or "").strip()
-        or "131072"
+        or DEFAULT_GROQ_CONTEXT_LENGTH
     )
     settings["OPENAI_COMPATIBLE_MAX_TOKENS"] = (
         str(secrets.get("GROQ_MAX_TOKENS") or "").strip()
-        or str(settings.get("OPENAI_COMPATIBLE_MAX_TOKENS") or "").strip()
-        or "8192"
+        or DEFAULT_GROQ_MAX_TOKENS
     )
 
     for key in _GROQ_MODEL_KEYS:

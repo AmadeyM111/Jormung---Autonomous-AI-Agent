@@ -37,6 +37,8 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     expected_model = "openai-compatible::openai/gpt-oss-120b"
     assert out["OPENAI_COMPATIBLE_API_KEY"] == "gsk_test_key_1234567890"
     assert out["OPENAI_COMPATIBLE_BASE_URL"] == "https://api.groq.com/openai/v1"
+    assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "8192"
+    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "1024"
     assert out["OUROBOROS_MODEL"] == expected_model
     assert out["OUROBOROS_MODEL_CODE"] == expected_model
     assert out["OUROBOROS_REVIEW_MODELS"] == f"{expected_model},{expected_model}"
@@ -48,6 +50,27 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     assert out["USE_LOCAL_LIGHT"] is False
     assert out["USE_LOCAL_CONSCIOUSNESS"] is False
     assert out["USE_LOCAL_FALLBACK"] is False
+
+def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
+    from ouroboros.colab_bootstrap import build_colab_settings
+    out = build_colab_settings({
+        "GROQ_API_KEY": "gsk_test_key_1234567890",
+    }, existing={
+        "OPENAI_COMPATIBLE_CONTEXT_LENGTH": "131072",
+        "OPENAI_COMPATIBLE_MAX_TOKENS": "8192",
+    })
+    assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "8192"
+    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "1024"
+
+def test_build_colab_settings_groq_profile_allows_explicit_secret_limits():
+    from ouroboros.colab_bootstrap import build_colab_settings
+    out = build_colab_settings({
+        "GROQ_API_KEY": "gsk_test_key_1234567890",
+        "GROQ_CONTEXT_LENGTH": "12000",
+        "GROQ_MAX_TOKENS": "2048",
+    })
+    assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "12000"
+    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "2048"
 
 def test_quickstart_runs_groq_smoke_before_server():
     import pathlib

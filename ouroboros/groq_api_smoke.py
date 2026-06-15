@@ -8,7 +8,12 @@ import os
 import sys
 from typing import Any, Dict
 
-from ouroboros.colab_bootstrap import DEFAULT_GROQ_OSS_MODEL, GROQ_OPENAI_COMPATIBLE_BASE_URL
+from ouroboros.colab_bootstrap import (
+    DEFAULT_GROQ_CONTEXT_LENGTH,
+    DEFAULT_GROQ_MAX_TOKENS,
+    DEFAULT_GROQ_OSS_MODEL,
+    GROQ_OPENAI_COMPATIBLE_BASE_URL,
+)
 from ouroboros.llm import LLMClient
 
 
@@ -72,7 +77,7 @@ def run_smoke(
         api_key=api_key,
         base_url=base_url,
         max_tokens=str(max_tokens),
-        context_length=os.environ.get("GROQ_CONTEXT_LENGTH", "131072"),
+        context_length=os.environ.get("GROQ_CONTEXT_LENGTH", DEFAULT_GROQ_CONTEXT_LENGTH),
     )
     qualified_model = f"openai-compatible::{_strip_prefix(model)}"
     client = LLMClient()
@@ -111,7 +116,7 @@ def run_smoke(
                 "content": "Call the lookup_oil_grade tool for Brent crude and do not answer in prose.",
             }],
             model=qualified_model,
-            max_tokens=1024,
+            max_tokens=min(max_tokens, 512),
             tools=[{
                 "type": "function",
                 "function": {
@@ -153,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=_default_model())
     parser.add_argument("--base-url", default=os.environ.get("OPENAI_COMPATIBLE_BASE_URL") or GROQ_OPENAI_COMPATIBLE_BASE_URL)
-    parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("GROQ_MAX_TOKENS") or os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS") or "8192"))
+    parser.add_argument("--max-tokens", type=int, default=int(os.environ.get("GROQ_MAX_TOKENS") or os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS") or DEFAULT_GROQ_MAX_TOKENS))
     parser.add_argument("--timeout", type=float, default=float(os.environ.get("GROQ_TIMEOUT_SEC") or "90"))
     parser.add_argument("--skip-tools", action="store_true")
     args = parser.parse_args(argv)
