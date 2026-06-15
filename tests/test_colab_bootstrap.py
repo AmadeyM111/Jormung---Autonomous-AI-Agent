@@ -81,6 +81,8 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "OPENAI_COMPATIBLE_API_KEY" in source
     assert "capture_output=True" in source
     assert source.index("ouroboros.groq_api_smoke") < source.index("server = subprocess.Popen")
+    assert "colab_server.log" in source
+    assert "timeout=600.0" in source
 
 def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib

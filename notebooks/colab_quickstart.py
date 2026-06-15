@@ -145,15 +145,21 @@ if settings.get("OPENAI_COMPATIBLE_BASE_URL") == "https://api.groq.com/openai/v1
         raise RuntimeError(f"Groq OSS smoke test failed with exit code {smoke.returncode}")
 
 # %%
+server_log_path = DATA_DIR / "logs" / "colab_server.log"
+server_log_path.parent.mkdir(parents=True, exist_ok=True)
+server_log_handle = server_log_path.open("a", encoding="utf-8")
 server = subprocess.Popen(
     server_command(REPO_DIR),
     cwd=str(REPO_DIR),
     env=os.environ.copy(),
+    stdout=server_log_handle,
+    stderr=subprocess.STDOUT,
 )
 print("Ouroboros server PID:", server.pid)
+print("Ouroboros server log:", server_log_path)
 
 # Install + review + grant + enable the Telegram bridge over the loopback gateway.
-bridge_status = ensure_telegram_bridge_live(settings=settings)
+bridge_status = ensure_telegram_bridge_live(settings=settings, timeout=600.0)
 print("Telegram bridge:", bridge_status)
 if bridge_status.get("ok") and bridge_status.get("command_mode_ok"):
     print("Message your Telegram bot now. Your first owner slash command (e.g. /status) registers your chat and asks you to send it once more;")
@@ -162,4 +168,14 @@ elif bridge_status.get("ok"):
     print("Bridge installed and enabled, but full_access command mode was not applied:", bridge_status.get("warning"))
     print("Slash commands stay restricted until you set TELEGRAM_COMMAND_MODE=full_access in the bridge settings.")
 else:
+    server_rc = server.poll()
+    print("Ouroboros server return code:", server_rc)
+    try:
+        server_log_handle.flush()
+        tail = server_log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        if tail:
+            print("Ouroboros server log tail:")
+            print(tail)
+    except Exception as exc:
+        print("Could not read Ouroboros server log:", exc)
     print("Bridge not live yet:", bridge_status.get("error") or bridge_status)
