@@ -86,15 +86,16 @@ def run_smoke(
     message, usage = client.chat(
         messages=[{
             "role": "user",
-            "content": "Answer in exactly two short bullet points about why smoke tests are useful.",
+            "content": "Reply with exactly OK.",
         }],
         model=qualified_model,
-        max_tokens=max_tokens,
+        max_tokens=min(max_tokens, 16),
         temperature=0,
+        reasoning_effort="low",
         timeout=request_timeout,
     )
     text = _message_text(message)
-    if len(text.strip()) < 10:
+    if text.strip().upper() != "OK":
         raise RuntimeError(f"Groq text smoke returned an empty/short response: {message!r}")
 
     summary: Dict[str, Any] = {
