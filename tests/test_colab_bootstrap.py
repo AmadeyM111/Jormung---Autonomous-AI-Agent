@@ -64,6 +64,13 @@ def test_quickstart_uses_clone_or_update_repo_helper():
     assert source.index(call) < source.index("pip", source.index(call))
     assert "dotenv" not in source
 
+def test_quickstart_has_ephemeral_storage_fallback_when_drive_mount_fails():
+    import pathlib
+    source = pathlib.Path(__file__).resolve().parents[1].joinpath("notebooks", "colab_quickstart.py").read_text(encoding="utf-8")
+    assert "DRIVE_MOUNTED = False" in source
+    assert "Google Drive mount failed; continuing with ephemeral /content storage" in source
+    assert 'pathlib.Path("/content/Ouroboros")' in source
+
 def test_clone_or_update_repo_fast_forwards_existing_checkout(tmp_path):
     from ouroboros.colab_bootstrap import clone_or_update_repo
     upstream = tmp_path / "upstream"; upstream.mkdir()

@@ -21,7 +21,12 @@ if not pathlib.Path("/content").is_dir() or not os.access("/content", os.W_OK):
         "Open this script/notebook in Colab instead of running it locally."
     )
 
-drive.mount("/content/drive")
+DRIVE_MOUNTED = False
+try:
+    drive.mount("/content/drive")
+    DRIVE_MOUNTED = True
+except Exception as exc:
+    print("Google Drive mount failed; continuing with ephemeral /content storage:", exc)
 
 # Minimal bootstrap clone so `ouroboros.colab_bootstrap` becomes importable.
 # Remote roles and fast-forward updates are handled by clone_or_update_repo below.
@@ -56,7 +61,7 @@ from ouroboros.colab_bootstrap import (
 clone_or_update_repo(REPO_DIR, source_url=SOURCE_URL)
 subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", "."], check=True)
 
-APP_ROOT = pathlib.Path("/content/drive/MyDrive/Ouroboros")
+APP_ROOT = pathlib.Path("/content/drive/MyDrive/Ouroboros") if DRIVE_MOUNTED else pathlib.Path("/content/Ouroboros")
 DATA_DIR = APP_ROOT / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
