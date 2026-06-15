@@ -1,4 +1,4 @@
-"""Smoke test Groq's OSS models through Ouroboros's OpenAI-compatible route."""
+"""Smoke test Groq through Ouroboros's OpenAI-compatible route."""
 
 from __future__ import annotations
 
@@ -64,6 +64,10 @@ def _message_text(message: Dict[str, Any]) -> str:
     return str(content or "")
 
 
+def _is_groq_compound_model(model: str) -> bool:
+    return _strip_prefix(model).startswith("groq/compound")
+
+
 def run_smoke(
     *,
     api_key: str,
@@ -113,7 +117,9 @@ def run_smoke(
     if not text_ok:
         summary["text_warning"] = "text smoke returned non-OK output; proceeding with tool smoke"
 
-    if not skip_tools:
+    if _is_groq_compound_model(model):
+        summary["tool_smoke_skipped"] = "Groq Compound does not support user-provided tools"
+    elif not skip_tools:
         tool_message, _tool_usage = client.chat(
             messages=[{
                 "role": "user",

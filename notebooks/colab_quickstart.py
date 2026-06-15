@@ -138,7 +138,7 @@ print("Settings:", settings_path)
 
 # %%
 if settings.get("OPENAI_COMPATIBLE_BASE_URL") == "https://api.groq.com/openai/v1":
-    print("Running Groq OSS smoke test...")
+    print("Running Groq smoke test...")
     smoke_env = os.environ.copy()
     for key in (
         "OPENAI_COMPATIBLE_API_KEY",
@@ -161,7 +161,7 @@ if settings.get("OPENAI_COMPATIBLE_BASE_URL") == "https://api.groq.com/openai/v1
     if smoke.returncode != 0:
         if smoke.stderr:
             print(smoke.stderr)
-        raise RuntimeError(f"Groq OSS smoke test failed with exit code {smoke.returncode}")
+        raise RuntimeError(f"Groq smoke test failed with exit code {smoke.returncode}")
 
 # %%
 server_log_path = DATA_DIR / "logs" / "colab_server.log"

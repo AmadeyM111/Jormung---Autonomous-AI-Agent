@@ -38,7 +38,7 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     assert out["OPENAI_COMPATIBLE_API_KEY"] == "gsk_test_key_1234567890"
     assert out["OPENAI_COMPATIBLE_BASE_URL"] == "https://api.groq.com/openai/v1"
     assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "8192"
-    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "64"
+    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "128"
     assert out["OUROBOROS_MINIMAL_CONTEXT"] == "true"
     assert out["OUROBOROS_EFFORT_TASK"] == "low"
     assert out["OUROBOROS_MODEL"] == expected_model
@@ -62,7 +62,7 @@ def test_build_colab_settings_groq_profile_defaults_to_low_context_mode():
         "OUROBOROS_MODEL": "openai-compatible::openai/gpt-oss-120b",
     })
     assert out["OUROBOROS_CONTEXT_MODE"] == "low"
-    assert out["OUROBOROS_MODEL"] == "openai-compatible::openai/gpt-oss-20b"
+    assert out["OUROBOROS_MODEL"] == "openai-compatible::groq/compound"
 
 def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
     from ouroboros.colab_bootstrap import build_colab_settings
@@ -73,7 +73,7 @@ def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
         "OPENAI_COMPATIBLE_MAX_TOKENS": "8192",
     })
     assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "8192"
-    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "64"
+    assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "128"
 
 def test_build_colab_settings_groq_profile_allows_explicit_secret_limits():
     from ouroboros.colab_bootstrap import build_colab_settings
@@ -89,6 +89,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     import pathlib
     source = pathlib.Path(__file__).resolve().parents[1].joinpath("notebooks", "colab_quickstart.py").read_text(encoding="utf-8")
     assert "ouroboros.groq_api_smoke" in source
+    assert "Running Groq smoke test..." in source
     assert source.index("apply_settings_to_env(settings)") < source.index("ouroboros.groq_api_smoke")
     assert "smoke_env" in source
     assert "OPENAI_COMPATIBLE_API_KEY" in source

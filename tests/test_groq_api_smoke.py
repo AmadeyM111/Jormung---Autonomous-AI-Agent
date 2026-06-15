@@ -42,3 +42,28 @@ def test_groq_smoke_treats_missing_tool_call_as_warning(monkeypatch):
     assert out["ok"] is True
     assert out["tool_smoke_ok"] is False
     assert "tool_warning" in out
+
+
+def test_groq_smoke_skips_user_tools_for_compound(monkeypatch):
+    import ouroboros.groq_api_smoke as smoke
+
+    calls = []
+
+    class _Client:
+        def chat(self, **kwargs):
+            calls.append(kwargs)
+            return {"content": "OK", "role": "assistant"}, {"prompt_tokens": 1, "completion_tokens": 1, "provider": "openai-compatible", "resolved_model": "groq/compound"}
+
+    monkeypatch.setattr(smoke, "LLMClient", lambda: _Client())
+    out = smoke.run_smoke(
+        api_key="gsk_test_key_1234567890",
+        base_url="https://api.groq.com/openai/v1",
+        model="groq/compound",
+        max_tokens=128,
+        request_timeout=1.0,
+    )
+
+    assert out["ok"] is True
+    assert out["tool_smoke_skipped"] == "Groq Compound does not support user-provided tools"
+    assert len(calls) == 1
+    assert "tools" not in calls[0]

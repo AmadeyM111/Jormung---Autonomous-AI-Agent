@@ -21,9 +21,9 @@ DEFAULT_COLAB_APP_ROOT = "/content/drive/MyDrive/Ouroboros"
 DEFAULT_COLAB_REPO_DIR = "/content/ouroboros_repo"
 DEFAULT_OFFICIAL_REPO_URL = "https://github.com/razzant/ouroboros.git"
 GROQ_OPENAI_COMPATIBLE_BASE_URL = "https://api.groq.com/openai/v1"
-DEFAULT_GROQ_OSS_MODEL = "openai/gpt-oss-20b"
+DEFAULT_GROQ_OSS_MODEL = "groq/compound"
 DEFAULT_GROQ_CONTEXT_LENGTH = "8192"
-DEFAULT_GROQ_MAX_TOKENS = "64"
+DEFAULT_GROQ_MAX_TOKENS = "128"
 
 _SECRET_KEYS = (
     "OPENROUTER_API_KEY",
@@ -106,7 +106,7 @@ def collect_colab_secrets() -> Dict[str, str]:
     out["GROQ_CONTEXT_LENGTH"] = get_colab_secret("GROQ_CONTEXT_LENGTH", required=False)
     out["GROQ_MAX_TOKENS"] = get_colab_secret("GROQ_MAX_TOKENS", required=False)
     if not any(out.get(key) for key in provider_keys):
-        # This Colab quickstart is pinned to Groq OSS by default. Prompt for the
+        # This Colab quickstart is pinned to Groq by default. Prompt for the
         # Groq key instead of falling back to OpenRouter, otherwise review runs
         # can fail later with opaque authorization/quorum errors.
         out["GROQ_API_KEY"] = get_colab_secret("GROQ_API_KEY")
@@ -127,7 +127,7 @@ def _strip_openai_compatible_prefix(model: str) -> str:
 
 
 def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -> None:
-    """Configure Groq's OpenAI-compatible OSS route and clear local GGUF routing."""
+    """Configure Groq's OpenAI-compatible route and clear local GGUF routing."""
     groq_key = str(secrets.get("GROQ_API_KEY") or "").strip()
     if not groq_key:
         return
@@ -139,8 +139,9 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
         if existing_model_raw.startswith("openai-compatible::")
         else ""
     )
+    stale_default_models = {"openai/gpt-oss-120b", "openai/gpt-oss-20b"}
     model = explicit_model or existing_compatible_model or DEFAULT_GROQ_OSS_MODEL
-    if not explicit_model and existing_compatible_model == "openai/gpt-oss-120b":
+    if not explicit_model and existing_compatible_model in stale_default_models:
         model = DEFAULT_GROQ_OSS_MODEL
     qualified_model = f"openai-compatible::{model}"
 
@@ -340,7 +341,7 @@ def _bootstrap_review_official_telegram_bridge(
 ) -> Dict[str, Any]:
     """Write a narrow bootstrap review for the official Telegram bridge.
 
-    Colab's default Groq OSS route can return valid HTTP 200 responses that do
+    Colab's default Groq route can return valid HTTP 200 responses that do
     not satisfy the 16-item skill-review JSON quorum. For the owner transport
     bridge, a headless runtime needs a way to finish bootstrapping after the
     marketplace install has landed the official payload. Keep this fallback
@@ -382,7 +383,7 @@ def _bootstrap_review_official_telegram_bridge(
                         "severity": "advisory",
                         "reason": (
                             "Colab bootstrap accepted the hash-verified official "
-                            "OuroborosHub telegram-bridge payload after Groq OSS "
+                            "OuroborosHub telegram-bridge payload after Groq "
                             "review quorum failed to return parseable findings."
                         ),
                         "model": "colab_bootstrap",
