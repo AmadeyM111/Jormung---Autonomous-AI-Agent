@@ -80,6 +80,7 @@ class BackgroundConsciousness:
         self._last_cycle_finished_at: str = ""
         self._last_idle_reason: str = "stopped"
         self._last_error: str = ""
+        self._overflow_failures: int = 0
 
     @property
     def is_running(self) -> bool:
@@ -128,6 +129,24 @@ class BackgroundConsciousness:
         except Exception:
             log.debug("Failed to shutdown consciousness tool executor", exc_info=True)
         return "Background consciousness stopping."
+
+    def _disable_due_to_context_overflow(self, error: Exception) -> None:
+        self._overflow_failures += 1
+        self._last_idle_reason = "context_overflow_disabled"
+        self._last_error = repr(error)
+        self._running = False
+        self._stop_event.set()
+        self._wakeup_event.set()
+        try:
+            self._tool_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            log.debug("Failed to shutdown consciousness executor after overflow", exc_info=True)
+        append_jsonl(self._drive_root / "logs" / "events.jsonl", {
+            "ts": utc_now_iso(),
+            "type": "consciousness_disabled",
+            "reason": "context_overflow",
+            "error": repr(error),
+        })
 
     def pause(self) -> None:
         """Pause during foreground task execution."""
@@ -255,6 +274,10 @@ class BackgroundConsciousness:
                 "type": "consciousness_context_overflow",
                 "error": str(exc),
             })
+            if self._overflow_failures >= 1:
+                self._disable_due_to_context_overflow(exc)
+            else:
+                self._overflow_failures += 1
             return False
         model = self._model
 
@@ -457,7 +480,7 @@ class BackgroundConsciousness:
         try:
             from ouroboros.improvement_backlog import format_backlog_digest
 
-            backlog_digest = format_backlog_digest(self._drive_root, limit=8, max_chars=4000)
+            backlog_digest = format_backlog_digest(self._drive_root, limit=4, max_chars=1600)
             if backlog_digest:
                 parts.append(backlog_digest)
         except Exception:

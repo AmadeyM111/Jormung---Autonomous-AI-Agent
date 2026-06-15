@@ -145,6 +145,31 @@ class TestBackgroundContext(unittest.TestCase):
         self.assertIn("## Improvement Backlog", text)
         self.assertIn("Reduce recurring task friction around REVIEW_BLOCKED", text)
 
+    def test_overflow_disables_background_consciousness_on_repeat(self):
+        from ouroboros.consciousness import BackgroundConsciousness
+
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        drive_root = tmpdir / "drive"
+        repo_dir = tmpdir / "repo"
+        (drive_root / "logs").mkdir(parents=True, exist_ok=True)
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch.object(BackgroundConsciousness, "_build_registry", return_value=MagicMock()):
+            bc = BackgroundConsciousness(
+                drive_root=drive_root,
+                repo_dir=repo_dir,
+                event_queue=None,
+                owner_chat_id_fn=lambda: None,
+            )
+
+        with patch.object(bc, "_build_context", side_effect=OverflowError("too large")):
+            bc._running = True
+            assert bc._think() is False
+            assert bc._running is True
+            assert bc._think() is False
+            assert bc._running is False
+            assert bc.status_snapshot()["last_idle_reason"] == "context_overflow_disabled"
+
 
 class TestBackgroundConsciousnessToolScope(unittest.TestCase):
     def test_background_consciousness_cannot_execute_or_delegate(self):
