@@ -174,6 +174,77 @@ def test_collect_colab_secrets_prompts_for_groq_by_default(monkeypatch):
     assert ("GROQ_FALLBACK_MODELS", False) in prompts
     assert ("OPENROUTER_API_KEY", True) not in prompts
 
+def test_patch_telegram_bridge_multi_user_updates_owner_only_snippets(tmp_path):
+    from ouroboros.colab_bootstrap import patch_telegram_bridge_multi_user
+
+    skill_dir = tmp_path / "skills" / "ouroboroshub" / "telegram-bridge"
+    skill_dir.mkdir(parents=True)
+    plugin = skill_dir / "plugin.py"
+    plugin.write_text(
+        '''from typing import Any, Dict
+
+def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
+    mirror_mode = str(settings.get("TELEGRAM_MIRROR_MODE") or "all").strip().lower()
+    configured = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if configured:
+        try:
+            chat_id = int(configured)
+        except ValueError:
+            return 0
+        if mirror_mode == "all":
+            # Mirror everything (web UI + Telegram) to the pinned chat
+            return chat_id
+        # telegram_only: only forward events that originate from Telegram transport
+        transport = event.get("transport") if isinstance(event.get("transport"), dict) else {}
+        if transport.get("kind") == "telegram":
+            return chat_id
+        return 0
+    # No pinned chat configured — only forward events that originate from
+    # a Telegram transport conversation so local UI events are never leaked.
+    transport = event.get("transport") if isinstance(event.get("transport"), dict) else {}
+    if transport.get("kind") != "telegram":
+        return 0
+    try:
+        return int(transport.get("conversation_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+async def _inject(api, payload: Dict[str, Any]) -> None:
+    settings = _load_settings(api)
+    pinned_chat = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if not pinned_chat:
+        api.log("warning", "Host inject refused: TELEGRAM_CHAT_ID is not configured or bound.")
+        return
+    port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
+
+                    if str(_inbound_chat) != pinned_chat:
+                        if _cb:
+                            try:
+                                await client.answer_callback_query(
+                                    str(_cb.get("id") or ""),
+                                    text=_LOCALIZED_TEXTS[lang]["not_authorized"],
+                                )
+                            except Exception:
+                                pass
+                        continue
+''',
+        encoding="utf-8",
+    )
+
+    result = patch_telegram_bridge_multi_user(tmp_path)
+    assert result["ok"] is True
+    assert result["changed"] is True
+    patched = plugin.read_text(encoding="utf-8")
+    assert "OUROBOROS_COLAB_MULTI_USER_PATCH" in patched
+    assert "payload_chat_id = int(payload.get(\"chat_id\") or 0)" in patched
+    assert "if transport.get(\"kind\") == \"telegram\":" in patched
+    assert "return chat_id\n    configured =" in patched
+    assert "callbacks are rejected above" in patched
+
+    second = patch_telegram_bridge_multi_user(tmp_path)
+    assert second["ok"] is True
+    assert second["changed"] is False
+
 def test_ensure_telegram_bridge_live_installs_enables_and_sets_full_access():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
     calls = []

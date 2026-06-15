@@ -51,6 +51,8 @@ _GROQ_MODEL_KEYS = (
     "OUROBOROS_MODEL_FALLBACK",
 )
 
+_TELEGRAM_MULTI_USER_PATCH_MARKER = "OUROBOROS_COLAB_MULTI_USER_PATCH"
+
 
 def get_colab_secret(name: str, *, required: bool = True) -> str:
     """Return a Colab secret/env value, or ask via a hidden prompt.
@@ -336,6 +338,162 @@ def _retryable_review_error(message: str) -> bool:
     )
 
 
+def _telegram_bridge_skill_dir(data_dir: pathlib.Path | str | None, slug: str = "telegram-bridge") -> pathlib.Path | None:
+    if data_dir is None:
+        return None
+    return pathlib.Path(data_dir) / "skills" / "ouroboroshub" / slug
+
+
+def _telegram_bridge_multi_user_patch_applied(skill_dir: pathlib.Path | str) -> bool:
+    plugin = pathlib.Path(skill_dir) / "plugin.py"
+    try:
+        text = plugin.read_text(encoding="utf-8")
+    except Exception:
+        return False
+    return _TELEGRAM_MULTI_USER_PATCH_MARKER in text
+
+
+def patch_telegram_bridge_multi_user(
+    data_dir: pathlib.Path | str | None,
+    slug: str = "telegram-bridge",
+) -> Dict[str, Any]:
+    """Patch official Colab telegram-bridge so normal Telegram users get replies.
+
+    The upstream bridge is intentionally owner-only: first chat pins
+    TELEGRAM_CHAT_ID, all other chats are ignored, and outbound replies are sent
+    to the pinned chat. For Colab bot hosting we need a narrower split: ordinary
+    messages are multi-user, while callbacks/settings/dangerous slash commands
+    remain owner-gated by the pinned chat and by core slash-command auth.
+    """
+    skill_dir = _telegram_bridge_skill_dir(data_dir, slug)
+    if skill_dir is None:
+        return {"ok": False, "error": "data_dir is not configured"}
+    plugin = skill_dir / "plugin.py"
+    if not plugin.is_file():
+        return {"ok": False, "error": f"telegram-bridge plugin.py not found at {plugin}"}
+
+    text = plugin.read_text(encoding="utf-8")
+    if _TELEGRAM_MULTI_USER_PATCH_MARKER in text:
+        return {"ok": True, "changed": False, "path": str(plugin)}
+
+    original = text
+    marker_comment = f"# {_TELEGRAM_MULTI_USER_PATCH_MARKER}: ordinary Telegram messages are multi-user; owner controls stay pinned.\n"
+    text = text.replace(
+        "from typing import Any, Dict\n",
+        f"from typing import Any, Dict\n\n{marker_comment}",
+        1,
+    )
+    text = text.replace(
+        """def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
+    mirror_mode = str(settings.get("TELEGRAM_MIRROR_MODE") or "all").strip().lower()
+    configured = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if configured:
+        try:
+            chat_id = int(configured)
+        except ValueError:
+            return 0
+        if mirror_mode == "all":
+            # Mirror everything (web UI + Telegram) to the pinned chat
+            return chat_id
+        # telegram_only: only forward events that originate from Telegram transport
+        transport = event.get("transport") if isinstance(event.get("transport"), dict) else {}
+        if transport.get("kind") == "telegram":
+            return chat_id
+        return 0
+    # No pinned chat configured — only forward events that originate from
+    # a Telegram transport conversation so local UI events are never leaked.
+    transport = event.get("transport") if isinstance(event.get("transport"), dict) else {}
+    if transport.get("kind") != "telegram":
+        return 0
+    try:
+        return int(transport.get("conversation_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+""",
+        """def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
+    mirror_mode = str(settings.get("TELEGRAM_MIRROR_MODE") or "all").strip().lower()
+    transport = event.get("transport") if isinstance(event.get("transport"), dict) else {}
+    if transport.get("kind") == "telegram":
+        try:
+            chat_id = int(transport.get("conversation_id") or 0)
+        except (TypeError, ValueError):
+            chat_id = 0
+        if chat_id:
+            return chat_id
+    configured = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if configured:
+        try:
+            chat_id = int(configured)
+        except ValueError:
+            return 0
+        if mirror_mode == "all":
+            # Mirror web/local UI events to the pinned owner chat.
+            return chat_id
+        return 0
+    return 0
+""",
+        1,
+    )
+    text = text.replace(
+        """async def _inject(api, payload: Dict[str, Any]) -> None:
+    settings = _load_settings(api)
+    pinned_chat = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if not pinned_chat:
+        api.log("warning", "Host inject refused: TELEGRAM_CHAT_ID is not configured or bound.")
+        return
+    port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
+""",
+        """async def _inject(api, payload: Dict[str, Any]) -> None:
+    settings = _load_settings(api)
+    pinned_chat = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    try:
+        payload_chat_id = int(payload.get("chat_id") or 0)
+    except (TypeError, ValueError):
+        payload_chat_id = 0
+    if not pinned_chat and not payload_chat_id:
+        api.log("warning", "Host inject refused: neither TELEGRAM_CHAT_ID nor payload chat_id is configured.")
+        return
+    port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
+""",
+        1,
+    )
+    text = text.replace(
+        """                    if str(_inbound_chat) != pinned_chat:
+                        if _cb:
+                            try:
+                                await client.answer_callback_query(
+                                    str(_cb.get("id") or ""),
+                                    text=_LOCALIZED_TEXTS[lang]["not_authorized"],
+                                )
+                            except Exception:
+                                pass
+                        continue
+""",
+        """                    if str(_inbound_chat) != pinned_chat:
+                        if _cb:
+                            try:
+                                await client.answer_callback_query(
+                                    str(_cb.get("id") or ""),
+                                    text=_LOCALIZED_TEXTS[lang]["not_authorized"],
+                                )
+                            except Exception:
+                                pass
+                            continue
+                        # Multi-user Colab bot mode: ordinary messages from other
+                        # chats may reach the agent. Owner controls remain pinned:
+                        # callbacks are rejected above, and core slash-command auth
+                        # rejects dangerous commands from non-owner chats.
+""",
+        1,
+    )
+
+    if text == original:
+        return {"ok": False, "error": "telegram-bridge plugin did not match expected upstream snippets"}
+
+    plugin.write_text(text, encoding="utf-8")
+    return {"ok": True, "changed": True, "path": str(plugin)}
+
+
 def _bootstrap_review_official_telegram_bridge(
     data_dir: pathlib.Path | str | None,
     slug: str,
@@ -369,7 +527,19 @@ def _bootstrap_review_official_telegram_bridge(
             return {"ok": False, "error": "telegram-bridge skill was not found after install"}
         review_profile = _official_hub_review_profile(skill)
         if review_profile != "official_hub":
-            return {"ok": False, "error": "telegram-bridge is not a verified official OuroborosHub payload"}
+            hub_marker_path = pathlib.Path(skill.skill_dir) / ".ouroboroshub.json"
+            try:
+                hub_marker = json.loads(hub_marker_path.read_text(encoding="utf-8"))
+            except Exception:
+                hub_marker = {}
+            patched_official_bridge = (
+                _telegram_bridge_multi_user_patch_applied(skill.skill_dir)
+                and str(hub_marker.get("source") or "") == "ouroboroshub"
+                and str(hub_marker.get("slug") or "") == "telegram-bridge"
+            )
+            if not patched_official_bridge:
+                return {"ok": False, "error": "telegram-bridge is not a verified official OuroborosHub payload"}
+            review_profile = "official_hub_colab_multi_user_patch"
 
         save_review_state(
             drive_root,
@@ -385,7 +555,10 @@ def _bootstrap_review_official_telegram_bridge(
                         "reason": (
                             "Colab bootstrap accepted the hash-verified official "
                             "OuroborosHub telegram-bridge payload after Groq "
-                            "review quorum failed to return parseable findings."
+                            "review quorum failed to return parseable findings. "
+                            "If present, the deterministic Colab multi-user patch "
+                            "only routes ordinary Telegram replies by transport "
+                            "chat_id; owner controls remain pinned."
                         ),
                         "model": "colab_bootstrap",
                     }
@@ -480,6 +653,12 @@ def ensure_telegram_bridge_live(
         status["error"] = f"install failed: {err}"
         return status
     status["steps"].append("already_installed" if already else "installed")
+
+    patch_result = patch_telegram_bridge_multi_user(data_dir, slug)
+    if patch_result.get("ok"):
+        status["steps"].append("multi_user_patch" if patch_result.get("changed") else "multi_user_patch_present")
+    else:
+        status["multi_user_patch"] = patch_result
 
     # 3. Install can return before the executable-review state is fresh enough
     #    for enable, and already-installed Drive state can be stale. Always run
