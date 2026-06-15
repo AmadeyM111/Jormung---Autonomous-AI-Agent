@@ -132,6 +132,23 @@ def test_get_colab_secret_optional_returns_empty_without_prompt(monkeypatch):
     # required=False must never block on getpass when the secret is absent.
     assert get_colab_secret("OUROBOROS_TEST_ABSENT_KEY", required=False) == ""
 
+def test_collect_colab_secrets_prompts_for_groq_by_default(monkeypatch):
+    import ouroboros.colab_bootstrap as bootstrap
+    prompts = []
+
+    def fake_secret(name, *, required=True):
+        prompts.append((name, required))
+        if required and name == "GROQ_API_KEY":
+            return "gsk_test_key_1234567890"
+        return ""
+
+    monkeypatch.setattr(bootstrap, "get_colab_secret", fake_secret)
+    secrets = bootstrap.collect_colab_secrets()
+
+    assert secrets["GROQ_API_KEY"] == "gsk_test_key_1234567890"
+    assert ("GROQ_API_KEY", True) in prompts
+    assert ("OPENROUTER_API_KEY", True) not in prompts
+
 def test_ensure_telegram_bridge_live_installs_enables_and_sets_full_access():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
     calls = []

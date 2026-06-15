@@ -103,8 +103,10 @@ def collect_colab_secrets() -> Dict[str, str]:
     out["GROQ_CONTEXT_LENGTH"] = get_colab_secret("GROQ_CONTEXT_LENGTH", required=False)
     out["GROQ_MAX_TOKENS"] = get_colab_secret("GROQ_MAX_TOKENS", required=False)
     if not any(out.get(key) for key in provider_keys):
-        # Ensure at least one runnable provider; OpenRouter is the default route.
-        out["OPENROUTER_API_KEY"] = get_colab_secret("OPENROUTER_API_KEY")
+        # This Colab quickstart is pinned to Groq OSS by default. Prompt for the
+        # Groq key instead of falling back to OpenRouter, otherwise review runs
+        # can fail later with opaque authorization/quorum errors.
+        out["GROQ_API_KEY"] = get_colab_secret("GROQ_API_KEY")
     out["GITHUB_TOKEN"] = get_colab_secret("GITHUB_TOKEN", required=False)
     return out
 
