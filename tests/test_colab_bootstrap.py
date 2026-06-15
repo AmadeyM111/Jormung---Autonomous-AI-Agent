@@ -172,6 +172,62 @@ def test_ensure_telegram_bridge_live_command_mode_failure_is_not_silent():
     assert status.get("warning")
     assert "command_mode:full_access" not in status["steps"]
 
+def test_ensure_telegram_bridge_live_retries_transient_review_quorum_failure():
+    from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
+    review_attempts = 0
+    sleeps = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        nonlocal review_attempts
+        if path == "/api/health":
+            return 200, {}
+        if path.endswith("/review"):
+            review_attempts += 1
+            if review_attempts == 1:
+                return 200, {"error": "Skill review quorum failure: fewer than 2 reviewers returned parseable findings."}
+        if path.endswith("/toggle"):
+            return 200, {"enabled": True}
+        return 200, {}
+
+    status = ensure_telegram_bridge_live(
+        settings={"TELEGRAM_BOT_TOKEN": "x"},
+        request=fake_request,
+        timeout=5,
+        review_retry_delay=75,
+        sleep=sleeps.append,
+    )
+
+    assert status["ok"] is True
+    assert status["steps"] == ["ready", "installed", "review_retry:1", "reviewed", "enabled", "command_mode:full_access"]
+    assert review_attempts == 2
+    assert sleeps == [75]
+
+def test_ensure_telegram_bridge_live_does_not_retry_non_transient_review_failure():
+    from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
+    review_attempts = 0
+    sleeps = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        nonlocal review_attempts
+        if path == "/api/health":
+            return 200, {}
+        if path.endswith("/review"):
+            review_attempts += 1
+            return 200, {"error": "review denied: missing required skill manifest field"}
+        return 200, {}
+
+    status = ensure_telegram_bridge_live(
+        settings={"TELEGRAM_BOT_TOKEN": "x"},
+        request=fake_request,
+        timeout=5,
+        sleep=sleeps.append,
+    )
+
+    assert status["ok"] is False
+    assert "review failed" in status["error"]
+    assert review_attempts == 1
+    assert sleeps == []
+
 def test_ensure_telegram_bridge_live_handles_already_installed_and_warns_missing_token():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
     def fake_request(method, path, body=None, timeout=None):

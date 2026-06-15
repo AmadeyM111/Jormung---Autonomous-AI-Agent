@@ -309,6 +309,20 @@ def _gateway_request(host: str, port: int) -> Callable[..., tuple]:
     return _call
 
 
+def _retryable_review_error(message: str) -> bool:
+    text = message.lower()
+    return any(
+        marker in text
+        for marker in (
+            "quorum failure",
+            "fewer than 2 reviewers",
+            "rate_limit",
+            "too many requests",
+            "429",
+        )
+    )
+
+
 def ensure_telegram_bridge_live(
     host: str = "127.0.0.1",
     port: int = 8765,
@@ -318,6 +332,9 @@ def ensure_telegram_bridge_live(
     command_mode: str = "full_access",
     timeout: float = 180.0,
     request: Optional[Callable[..., tuple]] = None,
+    review_retries: int = 3,
+    review_retry_delay: float = 75.0,
+    sleep: Optional[Callable[[float], None]] = None,
 ) -> Dict[str, Any]:
     """Install, review, grant, enable, and configure the Telegram bridge over loopback.
 
@@ -330,6 +347,7 @@ def ensure_telegram_bridge_live(
     """
     settings = settings or {}
     call = request or _gateway_request(host, port)
+    sleeper = sleep or time.sleep
     status: Dict[str, Any] = {"ok": False, "slug": slug, "steps": []}
 
     # 1. Wait until the server accepts loopback requests (the gateway client has
@@ -344,7 +362,7 @@ def ensure_telegram_bridge_live(
                 break
         except Exception:
             pass
-        time.sleep(1.0)
+        sleeper(1.0)
     if not ready:
         status["error"] = "server did not become ready"
         return status
@@ -381,18 +399,30 @@ def ensure_telegram_bridge_live(
     # 3. Install can return before the executable-review state is fresh enough
     #    for enable, and already-installed Drive state can be stale. Always run
     #    an explicit review here; auto-grant is governed by persisted settings.
-    try:
-        _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
-    except Exception as exc:
-        prefix = "re-review" if already else "review"
-        status["error"] = f"{prefix} request failed: {exc}"
-        return status
-    rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
-    if rerr:
-        prefix = "re-review" if already else "review"
+    prefix = "re-review" if already else "review"
+    max_attempts = max(1, int(review_retries) + 1)
+    for attempt in range(max_attempts):
+        try:
+            _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
+        except Exception as exc:
+            rerr = str(exc)
+            if attempt < max_attempts - 1 and _retryable_review_error(rerr):
+                status["steps"].append(f"review_retry:{attempt + 1}")
+                sleeper(review_retry_delay)
+                continue
+            status["error"] = f"{prefix} request failed: {exc}"
+            return status
+
+        rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+        if not rerr:
+            status["steps"].append("reviewed")
+            break
+        if attempt < max_attempts - 1 and _retryable_review_error(rerr):
+            status["steps"].append(f"review_retry:{attempt + 1}")
+            sleeper(review_retry_delay)
+            continue
         status["error"] = f"{prefix} failed: {rerr}"
         return status
-    status["steps"].append("reviewed")
 
     # 4. Enable (gateway enforces fresh executable review + all grants).
     try:
