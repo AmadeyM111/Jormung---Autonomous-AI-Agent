@@ -43,6 +43,7 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     assert out["OUROBOROS_EFFORT_TASK"] == "low"
     assert out["OUROBOROS_MODEL"] == expected_model
     assert out["OUROBOROS_MODEL_CODE"] == expected_model
+    assert out["OUROBOROS_MODEL_FALLBACK"] == "openai-compatible::llama-3.1-8b-instant"
     assert out["OUROBOROS_REVIEW_MODELS"] == f"{expected_model},{expected_model}"
     assert out["LOCAL_MODEL_SOURCE"] == ""
     assert out["LOCAL_MODEL_FILENAME"] == ""
@@ -63,6 +64,7 @@ def test_build_colab_settings_groq_profile_defaults_to_low_context_mode():
     })
     assert out["OUROBOROS_CONTEXT_MODE"] == "low"
     assert out["OUROBOROS_MODEL"] == "openai-compatible::groq/compound"
+    assert out["OUROBOROS_MODEL_FALLBACK"] == "openai-compatible::llama-3.1-8b-instant"
 
 def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
     from ouroboros.colab_bootstrap import build_colab_settings
@@ -84,6 +86,16 @@ def test_build_colab_settings_groq_profile_allows_explicit_secret_limits():
     })
     assert out["OPENAI_COMPATIBLE_CONTEXT_LENGTH"] == "12000"
     assert out["OPENAI_COMPATIBLE_MAX_TOKENS"] == "2048"
+
+def test_build_colab_settings_groq_profile_allows_explicit_fallback_model():
+    from ouroboros.colab_bootstrap import build_colab_settings
+    out = build_colab_settings({
+        "GROQ_API_KEY": "gsk_test_key_1234567890",
+        "GROQ_MODEL": "groq/compound",
+        "GROQ_FALLBACK_MODEL": "llama-3.3-70b-versatile",
+    })
+    assert out["OUROBOROS_MODEL"] == "openai-compatible::groq/compound"
+    assert out["OUROBOROS_MODEL_FALLBACK"] == "openai-compatible::llama-3.3-70b-versatile"
 
 def test_quickstart_runs_groq_smoke_before_server():
     import pathlib
@@ -171,6 +183,7 @@ def test_collect_colab_secrets_prompts_for_groq_by_default(monkeypatch):
 
     assert secrets["GROQ_API_KEY"] == "gsk_test_key_1234567890"
     assert ("GROQ_API_KEY", True) in prompts
+    assert ("GROQ_FALLBACK_MODEL", False) in prompts
     assert ("GROQ_FALLBACK_MODELS", False) in prompts
     assert ("OPENROUTER_API_KEY", True) not in prompts
 

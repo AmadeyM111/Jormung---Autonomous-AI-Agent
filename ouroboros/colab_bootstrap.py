@@ -22,6 +22,7 @@ DEFAULT_COLAB_REPO_DIR = "/content/ouroboros_repo"
 DEFAULT_OFFICIAL_REPO_URL = "https://github.com/razzant/ouroboros.git"
 GROQ_OPENAI_COMPATIBLE_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_OSS_MODEL = "groq/compound"
+DEFAULT_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 DEFAULT_GROQ_CONTEXT_LENGTH = "8192"
 DEFAULT_GROQ_MAX_TOKENS = "128"
 
@@ -106,6 +107,7 @@ def collect_colab_secrets() -> Dict[str, str]:
         out[key] = get_colab_secret(key, required=False)
     out["OPENAI_COMPATIBLE_BASE_URL"] = get_colab_secret("OPENAI_COMPATIBLE_BASE_URL", required=False)
     out["GROQ_MODEL"] = get_colab_secret("GROQ_MODEL", required=False)
+    out["GROQ_FALLBACK_MODEL"] = get_colab_secret("GROQ_FALLBACK_MODEL", required=False)
     out["GROQ_FALLBACK_MODELS"] = get_colab_secret("GROQ_FALLBACK_MODELS", required=False)
     out["GROQ_CONTEXT_LENGTH"] = get_colab_secret("GROQ_CONTEXT_LENGTH", required=False)
     out["GROQ_MAX_TOKENS"] = get_colab_secret("GROQ_MAX_TOKENS", required=False)
@@ -148,6 +150,10 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
     if not explicit_model and existing_compatible_model in stale_default_models:
         model = DEFAULT_GROQ_OSS_MODEL
     qualified_model = f"openai-compatible::{model}"
+    fallback_model = _strip_openai_compatible_prefix(
+        str(secrets.get("GROQ_FALLBACK_MODEL") or "").strip()
+    ) or DEFAULT_GROQ_FALLBACK_MODEL
+    qualified_fallback_model = f"openai-compatible::{fallback_model}"
 
     settings["OPENAI_COMPATIBLE_API_KEY"] = groq_key
     settings["OPENAI_COMPATIBLE_BASE_URL"] = GROQ_OPENAI_COMPATIBLE_BASE_URL
@@ -162,6 +168,9 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
 
     for key in _GROQ_MODEL_KEYS:
         settings[key] = qualified_model
+    settings["OUROBOROS_MODEL_FALLBACK"] = (
+        qualified_fallback_model if qualified_fallback_model != qualified_model else qualified_model
+    )
     if not str(settings.get("OUROBOROS_MODEL_CONSCIOUSNESS") or "").strip():
         settings["OUROBOROS_MODEL_CONSCIOUSNESS"] = qualified_model
     settings["OUROBOROS_REVIEW_MODELS"] = ",".join([qualified_model, qualified_model])
