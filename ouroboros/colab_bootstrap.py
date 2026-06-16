@@ -52,6 +52,7 @@ _GROQ_MODEL_KEYS = (
 )
 
 _TELEGRAM_MULTI_USER_PATCH_MARKER = "OUROBOROS_COLAB_MULTI_USER_PATCH"
+_TELEGRAM_HIDE_SLASH_PATCH_MARKER = "OUROBOROS_COLAB_HIDE_PUBLIC_SLASH_COMMANDS"
 
 
 def get_colab_secret(name: str, *, required: bool = True) -> str:
@@ -373,18 +374,22 @@ def patch_telegram_bridge_multi_user(
         return {"ok": False, "error": f"telegram-bridge plugin.py not found at {plugin}"}
 
     text = plugin.read_text(encoding="utf-8")
-    if _TELEGRAM_MULTI_USER_PATCH_MARKER in text:
+    if (
+        _TELEGRAM_MULTI_USER_PATCH_MARKER in text
+        and _TELEGRAM_HIDE_SLASH_PATCH_MARKER in text
+    ):
         return {"ok": True, "changed": False, "path": str(plugin)}
 
     original = text
-    marker_comment = f"# {_TELEGRAM_MULTI_USER_PATCH_MARKER}: ordinary Telegram messages are multi-user; owner controls stay pinned.\n"
-    text = text.replace(
-        "from typing import Any, Dict\n",
-        f"from typing import Any, Dict\n\n{marker_comment}",
-        1,
-    )
-    text = text.replace(
-        """def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
+    if _TELEGRAM_MULTI_USER_PATCH_MARKER not in text:
+        marker_comment = f"# {_TELEGRAM_MULTI_USER_PATCH_MARKER}: ordinary Telegram messages are multi-user; owner controls stay pinned.\n"
+        text = text.replace(
+            "from typing import Any, Dict\n",
+            f"from typing import Any, Dict\n\n{marker_comment}",
+            1,
+        )
+        text = text.replace(
+            """def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
     mirror_mode = str(settings.get("TELEGRAM_MIRROR_MODE") or "all").strip().lower()
     configured = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
     if configured:
@@ -410,7 +415,7 @@ def patch_telegram_bridge_multi_user(
     except (TypeError, ValueError):
         return 0
 """,
-        """def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
+            """def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
     mirror_mode = str(settings.get("TELEGRAM_MIRROR_MODE") or "all").strip().lower()
     transport = event.get("transport") if isinstance(event.get("transport"), dict) else {}
     if transport.get("kind") == "telegram":
@@ -432,10 +437,10 @@ def patch_telegram_bridge_multi_user(
         return 0
     return 0
 """,
-        1,
-    )
-    text = text.replace(
-        """async def _inject(api, payload: Dict[str, Any]) -> None:
+            1,
+        )
+        text = text.replace(
+            """async def _inject(api, payload: Dict[str, Any]) -> None:
     settings = _load_settings(api)
     pinned_chat = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
     if not pinned_chat:
@@ -443,7 +448,7 @@ def patch_telegram_bridge_multi_user(
         return
     port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
 """,
-        """async def _inject(api, payload: Dict[str, Any]) -> None:
+            """async def _inject(api, payload: Dict[str, Any]) -> None:
     settings = _load_settings(api)
     pinned_chat = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
     try:
@@ -455,10 +460,10 @@ def patch_telegram_bridge_multi_user(
         return
     port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
 """,
-        1,
-    )
-    text = text.replace(
-        """                    if str(_inbound_chat) != pinned_chat:
+            1,
+        )
+        text = text.replace(
+            """                    if str(_inbound_chat) != pinned_chat:
                         if _cb:
                             try:
                                 await client.answer_callback_query(
@@ -469,7 +474,7 @@ def patch_telegram_bridge_multi_user(
                                 pass
                         continue
 """,
-        """                    if str(_inbound_chat) != pinned_chat:
+            """                    if str(_inbound_chat) != pinned_chat:
                         if _cb:
                             try:
                                 await client.answer_callback_query(
@@ -484,8 +489,63 @@ def patch_telegram_bridge_multi_user(
                         # callbacks are rejected above, and core slash-command auth
                         # rejects dangerous commands from non-owner chats.
 """,
-        1,
-    )
+            1,
+        )
+
+    if _TELEGRAM_HIDE_SLASH_PATCH_MARKER not in text:
+        marker_comment = f"# {_TELEGRAM_HIDE_SLASH_PATCH_MARKER}: hide public Telegram slash commands and swallow /start locally.\n"
+        text = text.replace(
+            "from typing import Any, Dict\n",
+            f"from typing import Any, Dict\n\n{marker_comment}",
+            1,
+        )
+        text = text.replace(
+            """            # Set the command menu list for the blue bottom-left Menu button
+            try:
+                await client.call("setMyCommands", data={
+                    "commands": json.dumps([
+                        {"command": "menu", "description": "Interactive panel / Меню"},
+                        {"command": "language", "description": "Select language / Выбор языка"},
+                        {"command": "status", "description": "Request status / Статус"},
+                        {"command": "help", "description": "Usage guide / Справка"}
+                    ])
+                })
+                api.log("info", "Telegram bot commands configured successfully")
+            except Exception as exc:
+                api.log("warning", f"Failed to set Telegram bot commands: {exc}")
+""",
+            """            # Hide public slash-command suggestions from Telegram clients. Owner
+            # commands still work when typed manually in the pinned owner chat.
+            try:
+                await client.call("setMyCommands", data={"commands": json.dumps([])})
+                api.log("info", "Telegram public bot commands hidden")
+            except Exception as exc:
+                api.log("warning", f"Failed to hide Telegram bot commands: {exc}")
+""",
+            1,
+        )
+        text = text.replace(
+            """                    # Handle /menu command locally — always allowed
+                    cleaned_text = text.lower().strip()
+                    is_menu_cmd = cleaned_text == "/menu" or cleaned_text.startswith("/menu ") or (cleaned_text.startswith("/menu@") and cleaned_text.split("@")[0] == "/menu")
+""",
+            """                    # Telegram sends /start automatically when a user first
+                    # opens the bot. Treat it as UI chrome, not as an agent task.
+                    cleaned_text = text.lower().strip()
+                    is_start_cmd = cleaned_text == "/start" or cleaned_text.startswith("/start ") or (cleaned_text.startswith("/start@") and cleaned_text.split("@")[0] == "/start")
+                    if is_start_cmd:
+                        await client.send_message(
+                            chat_id,
+                            "Напишите сообщение обычным текстом. Команды управления доступны только владельцу.",
+                        )
+                        continue
+
+                    # Handle /menu command locally — owner convenience only; it is
+                    # hidden from Telegram's public command menu above.
+                    is_menu_cmd = cleaned_text == "/menu" or cleaned_text.startswith("/menu ") or (cleaned_text.startswith("/menu@") and cleaned_text.split("@")[0] == "/menu")
+""",
+            1,
+        )
 
     if text == original:
         return {"ok": False, "error": "telegram-bridge plugin did not match expected upstream snippets"}

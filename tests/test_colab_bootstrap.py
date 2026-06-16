@@ -217,6 +217,31 @@ async def _inject(api, payload: Dict[str, Any]) -> None:
         return
     port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
 
+            # Set the command menu list for the blue bottom-left Menu button
+            try:
+                await client.call("setMyCommands", data={
+                    "commands": json.dumps([
+                        {"command": "menu", "description": "Interactive panel / Меню"},
+                        {"command": "language", "description": "Select language / Выбор языка"},
+                        {"command": "status", "description": "Request status / Статус"},
+                        {"command": "help", "description": "Usage guide / Справка"}
+                    ])
+                })
+                api.log("info", "Telegram bot commands configured successfully")
+            except Exception as exc:
+                api.log("warning", f"Failed to set Telegram bot commands: {exc}")
+
+                    # Handle /menu command locally — always allowed
+                    cleaned_text = text.lower().strip()
+                    is_menu_cmd = cleaned_text == "/menu" or cleaned_text.startswith("/menu ") or (cleaned_text.startswith("/menu@") and cleaned_text.split("@")[0] == "/menu")
+                    if is_menu_cmd:
+                        header, keyboard = _build_menu_keyboard(command_mode, lang)
+                        if keyboard:
+                            await client.send_message_with_inline_keyboard(chat_id, header, keyboard)
+                        else:
+                            await client.send_message(chat_id, header)
+                        continue
+
                     if str(_inbound_chat) != pinned_chat:
                         if _cb:
                             try:
@@ -236,10 +261,13 @@ async def _inject(api, payload: Dict[str, Any]) -> None:
     assert result["changed"] is True
     patched = plugin.read_text(encoding="utf-8")
     assert "OUROBOROS_COLAB_MULTI_USER_PATCH" in patched
+    assert "OUROBOROS_COLAB_HIDE_PUBLIC_SLASH_COMMANDS" in patched
     assert "payload_chat_id = int(payload.get(\"chat_id\") or 0)" in patched
     assert "if transport.get(\"kind\") == \"telegram\":" in patched
     assert "return chat_id\n    configured =" in patched
     assert "callbacks are rejected above" in patched
+    assert 'data={"commands": json.dumps([])}' in patched
+    assert 'is_start_cmd = cleaned_text == "/start"' in patched
 
     second = patch_telegram_bridge_multi_user(tmp_path)
     assert second["ok"] is True
