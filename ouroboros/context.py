@@ -35,6 +35,42 @@ def minimal_context_enabled() -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _positive_int_env(name: str) -> Optional[int]:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _minimal_context_target_chars() -> int:
+    ctx_len = _positive_int_env("OPENAI_COMPATIBLE_CONTEXT_LENGTH") or 8192
+    max_tokens = _positive_int_env("OPENAI_COMPATIBLE_MAX_TOKENS") or 128
+    available_tokens = max(512, ctx_len - max_tokens - 256)
+    return available_tokens * 3
+
+
+def _bounded_minimal_recent_dialogue(memory: Memory, remaining_chars: int) -> str:
+    if remaining_chars < 300:
+        return ""
+    try:
+        entries = memory.read_jsonl_tail_after_offset("chat.jsonl", 0, max_entries=12)
+    except Exception:
+        log.debug("Failed to read minimal-context chat tail", exc_info=True)
+        return ""
+    summary = memory.summarize_chat(entries).strip()
+    if not summary:
+        return ""
+    limit = max(300, min(remaining_chars, 2400))
+    if len(summary) > limit:
+        summary = summary[-limit:].lstrip()
+        summary = "[Earlier recent dialogue omitted to fit provider limits.]\n" + summary
+    return "Recent dialogue:\n" + summary
+
+
 def _chat_log_signature_matches(expected: Any, current: Dict[str, Any]) -> bool:
     if not isinstance(expected, dict) or not current:
         return False
@@ -903,7 +939,7 @@ def build_llm_messages(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     base_prompt = safe_read(
         env.repo_path("prompts/SYSTEM.md"),
-        fallback="You are Ouroboros. Your base prompt could not be loaded."
+        fallback="You are Jormung. Your base prompt could not be loaded."
     )
     bible_md = safe_read(env.repo_path("BIBLE.md"))
     state_json = safe_read(env.drive_path("state/state.json"), fallback="{}")
@@ -913,23 +949,33 @@ def build_llm_messages(
         identity = memory.load_identity().strip()
         identity_line = ""
         if identity:
+            identity = identity.replace("Ouroboros's", "Jormung's").replace("Ouroboros", "Jormung")
             identity_line = "\nIdentity note: " + re.sub(r"\s+", " ", identity)[:240]
+        user_content = build_user_content(task)
+        user_chars = len(str(user_content))
+        target_chars = _minimal_context_target_chars()
         system_text = (
-            "You are Ouroboros running in minimal-context mode because the current "
+            "You are Jormung running in minimal-context mode because the current "
             "provider has a very small TPM quota. Answer the owner directly and "
             "concisely. Do not claim access to full memory, repo context, tools, "
             "or live web data unless the user provides it in the message."
             + identity_line
         )
+        remaining_chars = target_chars - len(system_text) - user_chars - 600
+        recent_dialogue = _bounded_minimal_recent_dialogue(memory, remaining_chars)
+        if recent_dialogue:
+            system_text = system_text + "\n\n" + recent_dialogue
         messages = [
             {"role": "system", "content": system_text},
-            {"role": "user", "content": build_user_content(task)},
+            {"role": "user", "content": user_content},
         ]
         return messages, {
             "estimated_tokens_before": estimate_tokens(system_text) + estimate_tokens(str(task.get("text") or "")),
             "estimated_tokens_after": estimate_tokens(system_text) + estimate_tokens(str(task.get("text") or "")),
             "soft_cap_tokens": soft_cap_tokens,
             "trimmed_sections": ["minimal_context"],
+            "minimal_context_target_chars": target_chars,
+            "minimal_context_recent_dialogue": bool(recent_dialogue),
         }
 
     # Reference-doc layout (ARCHITECTURE / DEVELOPMENT / README / CHECKLISTS) is

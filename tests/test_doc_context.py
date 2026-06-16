@@ -175,7 +175,15 @@ def test_minimal_context_omits_full_governance_and_memory(monkeypatch):
 
     tmpdir = pathlib.Path(tempfile.mkdtemp())
     env, memory = _make_env_and_memory(tmpdir)
+    chat_path = env.drive_path("logs/chat.jsonl")
+    chat_path.write_text(
+        '{"direction":"in","ts":"2026-06-16T10:00:00+00:00","username":"owner","text":"Меня зовут Амадей"}\n'
+        '{"direction":"out","ts":"2026-06-16T10:00:10+00:00","text":"Запомнил контекст диалога."}\n',
+        encoding="utf-8",
+    )
     monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_CONTEXT_LENGTH", "4096")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_MAX_TOKENS", "128")
 
     messages, cap_info = build_llm_messages(
         env=env,
@@ -184,11 +192,15 @@ def test_minimal_context_omits_full_governance_and_memory(monkeypatch):
     )
 
     text = str(messages[0]["content"])
+    assert "You are Jormung" in text
     assert "minimal-context mode" in text
+    assert "Recent dialogue" in text
+    assert "Меня зовут Амадей" in text
     assert "BIBLE.md" not in text
     assert "ARCHITECTURE.md" not in text
     assert "Scratchpad" not in text
     assert cap_info["trimmed_sections"] == ["minimal_context"]
+    assert cap_info["minimal_context_recent_dialogue"] is True
 
 
 def test_version_regexes_match_runtime_formats():
