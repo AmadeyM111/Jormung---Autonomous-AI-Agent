@@ -67,6 +67,42 @@ def test_drain_incoming_messages_preserves_image_payload():
     assert content[1]["image_url"]["url"] == "data:image/png;base64,aW1hZ2U="
 
 
+def test_fallback_model_switch_is_trace_only_not_chat_progress(tmp_path, monkeypatch):
+    from ouroboros.tools.registry import ToolRegistry
+
+    calls = []
+    progress = []
+    monkeypatch.setenv("OUROBOROS_MODEL_FALLBACK", "openai-compatible::fallback")
+
+    class FakeLLM:
+        def default_model(self):
+            return "openai-compatible::primary"
+
+    def fake_call_llm_with_retry(_llm, _messages, model, *_args, **_kwargs):
+        calls.append(model)
+        if len(calls) == 1:
+            return None, 0.0
+        return {"role": "assistant", "content": "fallback answer"}, 0.0
+
+    monkeypatch.setattr(loop_mod, "call_llm_with_retry", fake_call_llm_with_retry)
+
+    result, _usage, trace = run_llm_loop(
+        messages=[{"role": "user", "content": "hello"}],
+        tools=ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path),
+        llm=FakeLLM(),
+        drive_logs=tmp_path,
+        emit_progress=progress.append,
+        incoming_messages=queue.Queue(),
+        task_id="task1",
+        drive_root=tmp_path,
+    )
+
+    assert result == "fallback answer"
+    assert calls == ["openai-compatible::primary", "openai-compatible::fallback"]
+    assert not any("Fallback:" in item for item in progress)
+    assert any("Fallback:" in item for item in trace["reasoning_notes"])
+
+
 def test_maybe_inject_self_check_handles_assistant_none_content():
     messages = [
         {"role": "user", "content": "inspect"},

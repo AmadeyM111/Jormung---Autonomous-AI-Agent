@@ -1021,7 +1021,9 @@ def run_llm_loop(
                 fallback_use_local = os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
                 primary_tag = " (local)" if active_use_local else ""
                 fallback_tag = " (local)" if fallback_use_local else ""
-                emit_progress(f"⚡ Fallback: {active_model}{primary_tag} → {fallback_model}{fallback_tag} after empty response")
+                llm_trace["reasoning_notes"].append(
+                    f"Fallback: {active_model}{primary_tag} -> {fallback_model}{fallback_tag} after empty response"
+                )
                 msg, fallback_cost = call_llm_with_retry(
                     llm, messages, fallback_model, tool_schemas, active_effort,
                     max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
