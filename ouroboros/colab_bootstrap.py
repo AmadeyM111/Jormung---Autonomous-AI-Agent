@@ -6,6 +6,7 @@ import getpass
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import time
@@ -123,6 +124,40 @@ def collect_colab_secrets() -> Dict[str, str]:
 def masked_secret_status(settings: Dict[str, Any]) -> Dict[str, bool]:
     """Expose configured/missing status only; never return secret values."""
     return {key: bool(str(settings.get(key, "") or "").strip()) for key in _SECRET_KEYS}
+
+
+def ensure_colab_native_skill_seeded(
+    data_dir: pathlib.Path | str,
+    repo_dir: pathlib.Path | str,
+    slug: str,
+) -> Dict[str, Any]:
+    """Copy one bundled repo skill into Drive native skills when missing.
+
+    Existing Drive profiles may already have the global native-skill seed marker
+    from an older checkout. This helper lets Colab introduce a newly bundled
+    native skill without wiping user-managed skill state.
+    """
+    safe_slug = str(slug or "").strip()
+    if not safe_slug or "/" in safe_slug or "\\" in safe_slug or safe_slug in {".", ".."}:
+        return {"ok": False, "slug": safe_slug, "error": "invalid skill slug"}
+    source = pathlib.Path(repo_dir) / "skills" / safe_slug
+    target = pathlib.Path(data_dir) / "skills" / "native" / safe_slug
+    if not source.is_dir():
+        return {"ok": False, "slug": safe_slug, "error": f"bundled skill not found: {source}"}
+    if not any((source / candidate).is_file() for candidate in ("SKILL.md", "skill.json")):
+        return {"ok": False, "slug": safe_slug, "error": f"bundled skill has no manifest: {source}"}
+    if target.exists():
+        return {"ok": True, "slug": safe_slug, "changed": False, "target": str(target)}
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target)
+        (target / ".seed-origin").write_text(
+            f"seeded_from={source.parent.name}\ncolab=true\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return {"ok": False, "slug": safe_slug, "error": f"copy failed: {exc}"}
+    return {"ok": True, "slug": safe_slug, "changed": True, "target": str(target)}
 
 
 def _strip_openai_compatible_prefix(model: str) -> str:

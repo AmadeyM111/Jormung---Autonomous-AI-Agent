@@ -117,6 +117,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "HOST_SERVICE_PORT = _free_port(8767, used={SERVER_PORT})" in source
     assert "settings[\"OUROBOROS_HOST_SERVICE_PORT\"] = HOST_SERVICE_PORT" in source
     assert "server_command(REPO_DIR, port=SERVER_PORT)" in source
+    assert "ensure_colab_native_skill_seeded(DATA_DIR, REPO_DIR, \"research_digest\")" in source
     assert "ensure_telegram_bridge_live(settings=settings, data_dir=DATA_DIR, port=SERVER_PORT" in source
     assert "ensure_research_digest_live(port=SERVER_PORT" in source
 
@@ -187,6 +188,45 @@ def test_collect_colab_secrets_prompts_for_groq_by_default(monkeypatch):
     assert ("GROQ_FALLBACK_MODEL", False) in prompts
     assert ("GROQ_FALLBACK_MODELS", False) in prompts
     assert ("OPENROUTER_API_KEY", True) not in prompts
+
+def test_ensure_colab_native_skill_seeded_copies_missing_bundled_skill(tmp_path):
+    from ouroboros.colab_bootstrap import ensure_colab_native_skill_seeded
+
+    repo = tmp_path / "repo"
+    data = tmp_path / "data"
+    skill = repo / "skills" / "research_digest"
+    skill.mkdir(parents=True)
+    (skill / "skill.json").write_text('{"name":"research_digest","version":"0.1.0"}\n', encoding="utf-8")
+    (skill / "plugin.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    result = ensure_colab_native_skill_seeded(data, repo, "research_digest")
+
+    target = data / "skills" / "native" / "research_digest"
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert (target / "skill.json").is_file()
+    assert (target / "plugin.py").read_text(encoding="utf-8") == "VALUE = 1\n"
+    assert (target / ".seed-origin").is_file()
+
+def test_ensure_colab_native_skill_seeded_keeps_existing_drive_skill(tmp_path):
+    from ouroboros.colab_bootstrap import ensure_colab_native_skill_seeded
+
+    repo = tmp_path / "repo"
+    data = tmp_path / "data"
+    source = repo / "skills" / "research_digest"
+    target = data / "skills" / "native" / "research_digest"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    (source / "skill.json").write_text('{"name":"research_digest","version":"0.1.0"}\n', encoding="utf-8")
+    (source / "plugin.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (target / "skill.json").write_text('{"name":"research_digest","version":"local"}\n', encoding="utf-8")
+    (target / "plugin.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+    result = ensure_colab_native_skill_seeded(data, repo, "research_digest")
+
+    assert result["ok"] is True
+    assert result["changed"] is False
+    assert (target / "plugin.py").read_text(encoding="utf-8") == "VALUE = 1\n"
 
 def test_patch_telegram_bridge_multi_user_updates_owner_only_snippets(tmp_path):
     from ouroboros.colab_bootstrap import patch_telegram_bridge_multi_user

@@ -193,6 +193,7 @@ from ouroboros.colab_bootstrap import (
     clone_or_update_repo,
     collect_colab_secrets,
     configure_colab_personal_origin,
+    ensure_colab_native_skill_seeded,
     ensure_research_digest_live,
     ensure_telegram_bridge_live,
     export_colab_env,
@@ -240,6 +241,8 @@ apply_settings_to_env(settings)
 print("Secrets configured:", masked_secret_status(settings))
 print("Personal origin:", origin_result)
 print("Settings:", settings_path)
+research_seed = ensure_colab_native_skill_seeded(DATA_DIR, REPO_DIR, "research_digest")
+print("Research digest seed:", research_seed)
 
 # %%
 if settings.get("OPENAI_COMPATIBLE_BASE_URL") == "https://api.groq.com/openai/v1":
