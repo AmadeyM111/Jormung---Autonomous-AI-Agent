@@ -193,6 +193,7 @@ from ouroboros.colab_bootstrap import (
     clone_or_update_repo,
     collect_colab_secrets,
     configure_colab_personal_origin,
+    ensure_research_digest_live,
     ensure_telegram_bridge_live,
     export_colab_env,
     masked_secret_status,
@@ -302,6 +303,8 @@ print("Ouroboros server log:", server_log_path)
 # Install + review + grant + enable the Telegram bridge over the loopback gateway.
 bridge_status = ensure_telegram_bridge_live(settings=settings, data_dir=DATA_DIR, port=SERVER_PORT, timeout=600.0)
 print("Telegram bridge:", bridge_status)
+digest_status = ensure_research_digest_live(port=SERVER_PORT, timeout=600.0)
+print("Research digest:", digest_status)
 if bridge_status.get("ok") and bridge_status.get("command_mode_ok"):
     print("Message your Telegram bot now. Your first owner slash command (e.g. /status) registers your chat and asks you to send it once more;")
     print("after that, owner commands like /status and /panic run immediately.")

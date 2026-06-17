@@ -799,5 +799,76 @@ def ensure_telegram_bridge_live(
     return status
 
 
+def ensure_research_digest_live(
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    *,
+    slug: str = "research_digest",
+    timeout: float = 180.0,
+    request: Optional[Callable[..., tuple]] = None,
+    review_retries: int = 2,
+    review_retry_delay: float = 75.0,
+    sleep: Optional[Callable[[float], None]] = None,
+) -> Dict[str, Any]:
+    """Review and enable the bundled research digest skill in headless Colab."""
+    call = request or _gateway_request(host, port)
+    sleeper = sleep or time.sleep
+    status: Dict[str, Any] = {"ok": False, "slug": slug, "steps": []}
+
+    deadline = time.time() + timeout
+    ready = False
+    while time.time() < deadline:
+        try:
+            code, _ = call("GET", "/api/health")
+            if code == 200:
+                ready = True
+                break
+        except Exception:
+            pass
+        sleeper(1.0)
+    if not ready:
+        status["error"] = "server did not become ready"
+        return status
+    status["steps"].append("ready")
+
+    quoted = urllib.parse.quote(slug)
+    max_attempts = max(1, int(review_retries) + 1)
+    for attempt in range(max_attempts):
+        try:
+            _code, payload = call("POST", f"/api/skills/{quoted}/review", timeout=1800.0)
+        except Exception as exc:
+            rerr = str(exc)
+            if attempt < max_attempts - 1 and _retryable_review_error(rerr):
+                status["steps"].append(f"review_retry:{attempt + 1}")
+                sleeper(review_retry_delay)
+                continue
+            status["error"] = f"review request failed: {exc}"
+            return status
+
+        rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+        if not rerr:
+            status["steps"].append("reviewed")
+            break
+        if attempt < max_attempts - 1 and _retryable_review_error(rerr):
+            status["steps"].append(f"review_retry:{attempt + 1}")
+            sleeper(review_retry_delay)
+            continue
+        status["error"] = f"review failed: {rerr}"
+        return status
+
+    try:
+        _code, payload = call("POST", f"/api/skills/{quoted}/toggle", {"enabled": True})
+    except Exception as exc:
+        status["error"] = f"enable request failed: {exc}"
+        return status
+    err = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
+    if err:
+        status["error"] = f"enable failed: {err}"
+        return status
+    status["steps"].append("enabled")
+    status["ok"] = True
+    return status
+
+
 def server_command(repo_dir: pathlib.Path, *, host: str = "127.0.0.1", port: int = 8765) -> list[str]:
     return [sys.executable, "-m", "ouroboros.cli", "server", "--host", host, "--port", str(port), "--no-ui"]

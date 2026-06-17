@@ -960,7 +960,9 @@ def build_llm_messages(
             "concisely. Do not claim access to full memory, repo context, tools, "
             "or live web data unless the user provides it in the message or a "
             "tool is available in this turn. When a tool is available for fresh "
-            "source data, use it instead of guessing from memory."
+            "source data, use it instead of guessing from memory. If no source "
+            "tool is available, say the required source tool is not enabled or "
+            "not live; do not blame token limits for missing external access."
             + identity_line
         )
         remaining_chars = target_chars - len(system_text) - user_chars - 600

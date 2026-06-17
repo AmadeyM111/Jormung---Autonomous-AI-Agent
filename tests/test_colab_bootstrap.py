@@ -118,6 +118,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "settings[\"OUROBOROS_HOST_SERVICE_PORT\"] = HOST_SERVICE_PORT" in source
     assert "server_command(REPO_DIR, port=SERVER_PORT)" in source
     assert "ensure_telegram_bridge_live(settings=settings, data_dir=DATA_DIR, port=SERVER_PORT" in source
+    assert "ensure_research_digest_live(port=SERVER_PORT" in source
 
 def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib
@@ -308,6 +309,28 @@ def test_ensure_telegram_bridge_live_installs_enables_and_sets_full_access():
     # Install uses a review-scale timeout, not the default 60s (synchronous tri-model review).
     install_timeout = next(t for (m, p, b, t) in calls if p == "/api/marketplace/ouroboroshub/install")
     assert install_timeout is not None and install_timeout >= 600
+
+def test_ensure_research_digest_live_reviews_and_enables():
+    from ouroboros.colab_bootstrap import ensure_research_digest_live
+    calls = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        calls.append((method, path, body, timeout))
+        if path == "/api/health":
+            return 200, {"ok": True}
+        if path.endswith("/toggle"):
+            return 200, {"ok": True, "enabled": True}
+        return 200, {"ok": True}
+
+    status = ensure_research_digest_live(request=fake_request, timeout=5)
+
+    assert status["ok"] is True
+    assert status["steps"] == ["ready", "reviewed", "enabled"]
+    triples = [(m, p, b) for (m, p, b, _t) in calls]
+    assert ("POST", "/api/skills/research_digest/review", None) in triples
+    assert ("POST", "/api/skills/research_digest/toggle", {"enabled": True}) in triples
+    review_timeout = next(t for (m, p, b, t) in calls if p == "/api/skills/research_digest/review")
+    assert review_timeout is not None and review_timeout >= 600
 
 def test_ensure_telegram_bridge_live_command_mode_failure_is_not_silent():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
