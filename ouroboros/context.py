@@ -958,7 +958,9 @@ def build_llm_messages(
             "You are Jormung running in minimal-context mode because the current "
             "provider has a very small TPM quota. Answer the owner directly and "
             "concisely. Do not claim access to full memory, repo context, tools, "
-            "or live web data unless the user provides it in the message."
+            "or live web data unless the user provides it in the message or a "
+            "tool is available in this turn. When a tool is available for fresh "
+            "source data, use it instead of guessing from memory."
             + identity_line
         )
         remaining_chars = target_chars - len(system_text) - user_chars - 600

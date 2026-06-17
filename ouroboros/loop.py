@@ -37,6 +37,49 @@ _call_llm_with_retry = call_llm_with_retry
 log = logging.getLogger(__name__)
 
 
+def _minimal_context_tool_schemas(tools_registry) -> Optional[List[Dict[str, Any]]]:
+    """Expose a tiny extension-tool allowlist in minimal provider mode."""
+    raw = str(os.environ.get("OUROBOROS_MINIMAL_CONTEXT_TOOLS") or "research_digest").strip()
+    allowed_skills = {item.strip() for item in raw.split(",") if item.strip()}
+    if not allowed_skills or allowed_skills == {"none"}:
+        return None
+    out: List[Dict[str, Any]] = []
+    try:
+        from ouroboros.extension_loader import (
+            _lock as _ext_lock,
+            _tools as _ext_tools,
+            is_extension_live as _ext_is_live,
+        )
+
+        ctx = getattr(tools_registry, "_ctx", None)
+        meta = getattr(ctx, "task_metadata", {}) if ctx is not None else {}
+        drive_root = (
+            (meta.get("budget_drive_root") if isinstance(meta, dict) else "")
+            or getattr(ctx, "budget_drive_root", "")
+            or getattr(ctx, "drive_root", "")
+            or "."
+        )
+        capability_root = pathlib.Path(drive_root).resolve(strict=False)
+        with _ext_lock:
+            for tool in _ext_tools.values():
+                skill = str(tool.get("skill") or "")
+                if skill not in allowed_skills:
+                    continue
+                if not _ext_is_live(skill, capability_root, repo_path=str(tool.get("skills_repo_path") or "") or None):
+                    continue
+                out.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("schema", {"type": "object", "properties": {}}),
+                    },
+                })
+    except Exception:
+        log.debug("Failed to build minimal-context extension tool schemas", exc_info=True)
+    return out or None
+
+
 @dataclass
 class _CompactionRoundContext:
     tools: ToolRegistry
@@ -909,7 +952,7 @@ def run_llm_loop(
     _td.set_registry(tools)
 
     if minimal_context_enabled():
-        tool_schemas = None
+        tool_schemas = _minimal_context_tool_schemas(tools)
         _enabled_extra_tools = {}
     else:
         tool_schemas = initial_tool_schemas(tools)

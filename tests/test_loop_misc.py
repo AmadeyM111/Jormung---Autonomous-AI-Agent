@@ -103,6 +103,42 @@ def test_fallback_model_switch_is_trace_only_not_chat_progress(tmp_path, monkeyp
     assert any("Fallback:" in item for item in trace["reasoning_notes"])
 
 
+def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeypatch):
+    from ouroboros import extension_loader
+    from ouroboros.tools.registry import ToolRegistry
+
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT_TOOLS", "research_digest")
+    registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
+    old_tools = dict(extension_loader._tools)
+    old_is_live = extension_loader.is_extension_live
+    try:
+        with extension_loader._lock:
+            extension_loader._tools.clear()
+            extension_loader._tools["ext_research_refresh"] = {
+                "name": "ext_research_refresh",
+                "skill": "research_digest",
+                "description": "Refresh research sources",
+                "schema": {"type": "object", "properties": {}},
+            }
+            extension_loader._tools["ext_other_refresh"] = {
+                "name": "ext_other_refresh",
+                "skill": "other_skill",
+                "description": "Other tool",
+                "schema": {"type": "object", "properties": {}},
+            }
+        monkeypatch.setattr(extension_loader, "is_extension_live", lambda *_args, **_kwargs: True)
+
+        schemas = loop_mod._minimal_context_tool_schemas(registry)
+    finally:
+        with extension_loader._lock:
+            extension_loader._tools.clear()
+            extension_loader._tools.update(old_tools)
+        monkeypatch.setattr(extension_loader, "is_extension_live", old_is_live)
+
+    names = [schema["function"]["name"] for schema in schemas or []]
+    assert names == ["ext_research_refresh"]
+
+
 def test_maybe_inject_self_check_handles_assistant_none_content():
     messages = [
         {"role": "user", "content": "inspect"},
