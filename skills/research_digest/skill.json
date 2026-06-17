@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "name": "research_digest",
+  "description": "Collects RSS/Atom feeds and public Telegram channel pages into a deduplicated AI/ML/business research digest.",
+  "version": "0.1.0",
+  "type": "extension",
+  "entry": "plugin.py",
+  "permissions": ["net", "tool", "route", "widget", "supervised_task"],
+  "env_from_settings": [],
+  "when_to_use": "User wants to monitor AI, engineering, ML adoption, agentic systems, business implementation cases, research papers, or prepare a Telegram-channel news digest.",
+  "scheduled_tasks": [
+    {
+      "name": "daily_ai_research_digest",
+      "cron": "0 14 * * *",
+      "timezone": "Europe/Moscow",
+      "description": "At 14:00 Moscow time, refresh configured RSS and public Telegram AI/Research sources, then build a weekly digest with exactly 6 highest-scoring items using research_digest.refresh(limit_per_source=30) and research_digest.digest(hours=168, limit=6, min_score=1). Return Telegram-ready markdown and mention source errors, if any."
+    }
+  ],
+  "ui_tab": {
+    "tab_id": "digest",
+    "title": "Research digest",
+    "icon": "newspaper",
+    "render": {
+      "kind": "declarative",
+      "schema_version": 1,
+      "components": [
+        {
+          "type": "form",
+          "route": "refresh",
+          "method": "POST",
+          "target": "refresh",
+          "submit_label": "Refresh",
+          "fields": [
+            {
+              "name": "limit_per_source",
+              "label": "Per source",
+              "type": "number",
+              "default": "20"
+            }
+          ]
+        },
+        {
+          "type": "status",
+          "target": "refresh",
+          "idle": "Refresh configured RSS/Atom and public Telegram sources.",
+          "loading": "Fetching sources...",
+          "error": "Refresh failed.",
+          "success": "Refresh complete"
+        },
+        {
+          "type": "form",
+          "route": "digest",
+          "method": "GET",
+          "target": "digest",
+          "submit_label": "Build digest",
+          "fields": [
+            {
+              "name": "hours",
+              "label": "Hours",
+              "type": "number",
+              "default": "48"
+            },
+            {
+              "name": "limit",
+              "label": "Items",
+              "type": "number",
+              "default": "12"
+            }
+          ]
+        },
+        {
+          "type": "json",
+          "target": "digest"
+        }
+      ]
+    }
+  }
+}

@@ -295,6 +295,7 @@ def sync_skill_schedules(skills: List[Any], *, drive_root: pathlib.Path | None =
                         "type": "task",
                         "text": (
                             f"Run reviewed scheduled skill task `{getattr(skill, 'name', '')}/{name}`. "
+                            f"Task description: {str(spec.get('description') or '').strip() or 'No additional description.'} "
                             "Use skill_exec or the reviewed extension surface as appropriate, then report outcome."
                         ),
                         "metadata": {

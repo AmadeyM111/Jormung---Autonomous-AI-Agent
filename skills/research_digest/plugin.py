@@ -1,0 +1,664 @@
+"""Research/news collection extension for RSS, Atom, and public Telegram pages."""
+
+from __future__ import annotations
+
+import datetime as _dt
+import email.utils
+import hashlib
+import html
+import ipaddress
+import json
+import pathlib
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+from typing import Any, Dict, Iterable, List
+
+try:
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+except ModuleNotFoundError:  # pragma: no cover - lets offline parsers import the skill without web deps.
+    Request = Any  # type: ignore[assignment]
+
+    class JSONResponse:  # type: ignore[no-redef]
+        def __init__(self, payload: Any, status_code: int = 200):
+            self.payload = payload
+            self.status_code = status_code
+
+
+_TIMEOUT_SEC = 15
+_MAX_RESPONSE_BYTES = 3 * 1024 * 1024
+_USER_AGENT = "Ouroboros-ResearchDigest/0.1"
+_CONFIG_FILE = "config.json"
+_RECORDS_FILE = "records.json"
+_MAX_STORED_ITEMS = 600
+
+_DEFAULT_CONFIG: Dict[str, Any] = {
+    "schema_version": 1,
+    "topics": {
+        "ai": [
+            "ai", "artificial intelligence", "generative", "llm", "gpt", "claude",
+            "gemini", "openai", "anthropic", "inference", "fine-tuning", "rag",
+            "eval", "benchmark", "ии", "нейросеть", "нейросети",
+        ],
+        "agentic_systems": [
+            "agent", "agents", "agentic", "multi-agent", "tool use", "workflow",
+            "autonomous", "planning", "агент", "агентск",
+        ],
+        "ml_business": [
+            "mlops", "production ml", "enterprise", "case study", "deployment",
+            "implementation", "adoption", "roi", "business", "platform",
+            "внедрение", "бизнес", "продакшен",
+        ],
+        "engineering": [
+            "engineering", "architecture", "distributed", "systems", "infra",
+            "latency", "reliability", "observability", "инженер", "архитектур",
+        ],
+        "research": [
+            "paper", "research", "arxiv", "preprint", "dataset", "method",
+            "study", "survey", "исследован", "статья",
+        ],
+    },
+    "sources": [
+        {"id": "arxiv_cs_ai", "kind": "rss", "url": "https://export.arxiv.org/rss/cs.AI", "title": "arXiv cs.AI"},
+        {"id": "arxiv_cs_lg", "kind": "rss", "url": "https://export.arxiv.org/rss/cs.LG", "title": "arXiv cs.LG"},
+        {
+            "id": "aws_ml_blog",
+            "kind": "rss",
+            "url": "https://aws.amazon.com/blogs/machine-learning/feed/",
+            "title": "AWS ML Blog",
+        },
+        {"id": "google_research", "kind": "rss", "url": "https://research.google/blog/rss/", "title": "Google Research"},
+        {
+            "id": "mit_ai",
+            "kind": "rss",
+            "url": "https://news.mit.edu/rss/topic/artificial-intelligence2",
+            "title": "MIT AI News",
+        },
+    ],
+}
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise urllib.error.HTTPError(req.full_url, code, "redirect refused", headers, fp)
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _utc_now() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_dt(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = email.utils.parsedate_to_datetime(text)
+    except Exception:
+        try:
+            parsed = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            return text[:80]
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+    return parsed.astimezone(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _dt_value(value: Any) -> _dt.datetime:
+    text = str(value or "").strip()
+    if not text:
+        return _dt.datetime.fromtimestamp(0, tz=_dt.timezone.utc)
+    try:
+        parsed = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_dt.timezone.utc)
+        return parsed.astimezone(_dt.timezone.utc)
+    except Exception:
+        return _dt.datetime.fromtimestamp(0, tz=_dt.timezone.utc)
+
+
+def _strip_html(value: Any) -> str:
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
+    text = re.sub(r"(?s)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\n\s+", "\n", text)
+    return text.strip()
+
+
+def _state_path(state_dir: pathlib.Path, name: str) -> pathlib.Path:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return state_dir / name
+
+
+def _read_json(path: pathlib.Path, default: Any) -> Any:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if data is not None else default
+    except FileNotFoundError:
+        return default
+    except Exception:
+        return default
+
+
+def _atomic_write_json(path: pathlib.Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _load_config(state_dir: pathlib.Path) -> Dict[str, Any]:
+    config = json.loads(json.dumps(_DEFAULT_CONFIG, ensure_ascii=False))
+    saved = _read_json(_state_path(state_dir, _CONFIG_FILE), {})
+    if isinstance(saved, dict):
+        if isinstance(saved.get("topics"), dict):
+            config["topics"].update(saved["topics"])
+        if isinstance(saved.get("sources"), list):
+            config["sources"] = saved["sources"]
+    return config
+
+
+def _save_config(state_dir: pathlib.Path, config: Dict[str, Any]) -> None:
+    clean = {
+        "schema_version": 1,
+        "topics": config.get("topics") if isinstance(config.get("topics"), dict) else _DEFAULT_CONFIG["topics"],
+        "sources": [s for s in config.get("sources", []) if isinstance(s, dict)],
+    }
+    _atomic_write_json(_state_path(state_dir, _CONFIG_FILE), clean)
+
+
+def _load_records(state_dir: pathlib.Path) -> Dict[str, Any]:
+    data = _read_json(_state_path(state_dir, _RECORDS_FILE), {"schema_version": 1, "items": []})
+    if not isinstance(data, dict):
+        data = {"schema_version": 1, "items": []}
+    if not isinstance(data.get("items"), list):
+        data["items"] = []
+    return data
+
+
+def _save_records(state_dir: pathlib.Path, records: Dict[str, Any]) -> None:
+    items = [item for item in records.get("items", []) if isinstance(item, dict)]
+    items.sort(key=lambda x: (_dt_value(x.get("published_at") or x.get("fetched_at")), int(x.get("score") or 0)), reverse=True)
+    records["schema_version"] = 1
+    records["items"] = items[:_MAX_STORED_ITEMS]
+    _atomic_write_json(_state_path(state_dir, _RECORDS_FILE), records)
+
+
+def _is_blocked_host(host: str) -> bool:
+    clean = str(host or "").strip().strip("[]").lower()
+    if not clean:
+        return True
+    if clean in {"localhost", "localhost.localdomain"} or clean.endswith(".localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(clean)
+    except ValueError:
+        return False
+    return bool(ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved)
+
+
+def _validate_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("source URL must use http or https")
+    if _is_blocked_host(parsed.hostname or ""):
+        raise ValueError("source URL host is blocked")
+    return urllib.parse.urlunparse(parsed)
+
+
+def _fetch_text(url: str) -> str:
+    safe_url = _validate_url(url)
+    request = urllib.request.Request(
+        safe_url,
+        headers={"User-Agent": _USER_AGENT, "Accept": "application/rss+xml, application/atom+xml, text/html, */*"},
+    )
+    with _OPENER.open(request, timeout=_TIMEOUT_SEC) as response:
+        raw = response.read(_MAX_RESPONSE_BYTES + 1)
+    if len(raw) > _MAX_RESPONSE_BYTES:
+        raise ValueError("upstream response is too large")
+    encoding = response.headers.get_content_charset() or "utf-8"
+    return raw.decode(encoding, errors="replace")
+
+
+def _first_text(parent: ET.Element, names: Iterable[str]) -> str:
+    wanted = set(names)
+    for child in parent.iter():
+        name = child.tag.rsplit("}", 1)[-1].lower()
+        if name in wanted and child.text:
+            return _strip_html(child.text)
+    return ""
+
+
+def _entry_link(entry: ET.Element) -> str:
+    for child in entry:
+        name = child.tag.rsplit("}", 1)[-1].lower()
+        if name == "link":
+            href = child.attrib.get("href")
+            if href:
+                return str(href).strip()
+            if child.text:
+                return str(child.text).strip()
+    return ""
+
+
+def _parse_rss_atom(raw: str, source: Dict[str, Any], fetched_at: str) -> List[Dict[str, Any]]:
+    root = ET.fromstring(raw)
+    root_name = root.tag.rsplit("}", 1)[-1].lower()
+    entries: list[ET.Element] = []
+    if root_name == "rss":
+        channel = root.find("channel")
+        entries = list(channel.findall("item")) if channel is not None else []
+    elif root_name in {"feed", "rdf"}:
+        entries = [el for el in root.iter() if el.tag.rsplit("}", 1)[-1].lower() in {"entry", "item"}]
+    else:
+        entries = [el for el in root.iter() if el.tag.rsplit("}", 1)[-1].lower() in {"entry", "item"}]
+
+    out: List[Dict[str, Any]] = []
+    for entry in entries:
+        title = _first_text(entry, ("title",))
+        link = _entry_link(entry)
+        summary = _first_text(entry, ("description", "summary", "content"))
+        published = _parse_dt(_first_text(entry, ("pubdate", "published", "updated", "date")))
+        if not title and summary:
+            title = summary[:100]
+        if not title and not link:
+            continue
+        out.append(_make_item(source, title, link, summary, published, fetched_at))
+    return out
+
+
+def _parse_telegram_public(raw: str, source: Dict[str, Any], fetched_at: str) -> List[Dict[str, Any]]:
+    blocks = re.findall(r'(?is)<div class="tgme_widget_message[^"]*".*?</div>\s*</div>', raw)
+    if not blocks:
+        blocks = re.findall(r'(?is)<div class="tgme_widget_message[^"]*".*?(?=<div class="tgme_widget_message|\Z)', raw)
+    out: List[Dict[str, Any]] = []
+    for block in blocks[-40:]:
+        text_match = re.search(r'(?is)<div class="tgme_widget_message_text[^"]*".*?>(.*?)</div>', block)
+        if not text_match:
+            continue
+        text = _strip_html(text_match.group(1))
+        if not text:
+            continue
+        date_match = re.search(r'<time[^>]+datetime="([^"]+)"', block)
+        post_match = re.search(r'data-post="([^"]+)"', block)
+        post = html.unescape(post_match.group(1)) if post_match else ""
+        link = f"https://t.me/{post}" if post else str(source.get("url") or "")
+        title = text.splitlines()[0][:140]
+        out.append(_make_item(source, title, link, text[:800], _parse_dt(date_match.group(1) if date_match else ""), fetched_at))
+    return out
+
+
+def _make_item(source: Dict[str, Any], title: str, link: str, summary: str, published: str, fetched_at: str) -> Dict[str, Any]:
+    source_id = str(source.get("id") or source.get("title") or source.get("url") or "source").strip()
+    return {
+        "id": "",
+        "source_id": source_id,
+        "source_title": str(source.get("title") or source_id).strip(),
+        "kind": str(source.get("kind") or "rss").strip(),
+        "title": _strip_html(title)[:300],
+        "url": str(link or "").strip(),
+        "summary": _strip_html(summary)[:1200],
+        "published_at": published,
+        "fetched_at": fetched_at,
+    }
+
+
+def _fingerprint(item: Dict[str, Any]) -> str:
+    key = str(item.get("url") or "").strip().lower()
+    if not key:
+        key = "|".join(str(item.get(k) or "").strip().lower() for k in ("source_id", "title", "published_at"))
+    return hashlib.sha256(key.encode("utf-8", errors="replace")).hexdigest()[:24]
+
+
+def _score_item(item: Dict[str, Any], topics: Dict[str, Any]) -> Dict[str, Any]:
+    text = f"{item.get('title', '')}\n{item.get('summary', '')}".lower()
+    matches: Dict[str, List[str]] = {}
+    score = 0
+    for topic, words in topics.items():
+        if not isinstance(words, list):
+            continue
+        hits = []
+        for word in words:
+            token = str(word or "").strip().lower()
+            if token and token in text:
+                hits.append(token)
+        if hits:
+            unique = sorted(set(hits))[:8]
+            matches[str(topic)] = unique
+            score += 2 + min(len(unique), 5)
+    item["topic_matches"] = matches
+    item["score"] = score
+    return item
+
+
+def _collect_source(source: Dict[str, Any], topics: Dict[str, Any], limit: int) -> Dict[str, Any]:
+    fetched_at = _utc_now()
+    kind = str(source.get("kind") or "rss").strip().lower()
+    url = str(source.get("url") or "").strip()
+    if kind == "telegram_public" and not url:
+        channel = str(source.get("channel") or "").strip().lstrip("@")
+        url = f"https://t.me/s/{urllib.parse.quote(channel)}"
+    raw = _fetch_text(url)
+    if kind == "telegram_public":
+        parsed = _parse_telegram_public(raw, source, fetched_at)
+    else:
+        parsed = _parse_rss_atom(raw, source, fetched_at)
+    items = [_score_item(item, topics) for item in parsed]
+    return {"source_id": source.get("id"), "items": items[: max(1, min(limit, 100))], "fetched_at": fetched_at}
+
+
+def _refresh(state_dir: pathlib.Path, *, limit_per_source: int = 20, source_id: str = "") -> Dict[str, Any]:
+    config = _load_config(state_dir)
+    topics = config.get("topics") if isinstance(config.get("topics"), dict) else {}
+    sources = [s for s in config.get("sources", []) if isinstance(s, dict)]
+    if source_id:
+        sources = [s for s in sources if str(s.get("id") or "") == source_id]
+    records = _load_records(state_dir)
+    by_id = {str(item.get("id") or _fingerprint(item)): dict(item) for item in records.get("items", []) if isinstance(item, dict)}
+    errors: List[Dict[str, str]] = []
+    fetched = 0
+    new_count = 0
+    updated_count = 0
+    for source in sources:
+        sid = str(source.get("id") or source.get("url") or "source")
+        try:
+            result = _collect_source(source, topics, int(limit_per_source or 20))
+        except Exception as exc:
+            errors.append({"source_id": sid, "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        fetched += 1
+        for item in result["items"]:
+            item_id = _fingerprint(item)
+            item["id"] = item_id
+            if item_id in by_id:
+                by_id[item_id].update({k: v for k, v in item.items() if v not in ("", None, {}, [])})
+                updated_count += 1
+            else:
+                by_id[item_id] = item
+                new_count += 1
+    records["items"] = list(by_id.values())
+    _save_records(state_dir, records)
+    top = _digest_items(state_dir, hours=72, limit=8, min_score=1)["items"]
+    return {
+        "ok": True,
+        "sources_requested": len(sources),
+        "sources_fetched": fetched,
+        "new_items": new_count,
+        "updated_items": updated_count,
+        "errors": errors,
+        "top": top,
+    }
+
+
+def _digest_items(state_dir: pathlib.Path, *, hours: int = 48, limit: int = 12, min_score: int = 1) -> Dict[str, Any]:
+    records = _load_records(state_dir)
+    cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=max(1, int(hours or 48)))
+    items = []
+    for item in records.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        when = _dt_value(item.get("published_at") or item.get("fetched_at"))
+        if when < cutoff:
+            continue
+        if int(item.get("score") or 0) < int(min_score or 0):
+            continue
+        items.append(item)
+    items.sort(key=lambda x: (int(x.get("score") or 0), _dt_value(x.get("published_at") or x.get("fetched_at"))), reverse=True)
+    selected = items[: max(1, min(int(limit or 12), 50))]
+    return {"ok": True, "hours": hours, "limit": limit, "items": selected, "markdown": _to_markdown(selected)}
+
+
+def _to_markdown(items: List[Dict[str, Any]]) -> str:
+    if not items:
+        return "No matching items yet. Run refresh or add more sources."
+    lines = ["# AI/ML research digest", ""]
+    for idx, item in enumerate(items, 1):
+        title = str(item.get("title") or "Untitled").strip()
+        url = str(item.get("url") or "").strip()
+        source = str(item.get("source_title") or item.get("source_id") or "").strip()
+        topics = ", ".join(sorted((item.get("topic_matches") or {}).keys()))
+        published = str(item.get("published_at") or item.get("fetched_at") or "").strip()
+        heading = f"{idx}. [{title}]({url})" if url else f"{idx}. {title}"
+        lines.append(heading)
+        meta = " | ".join(part for part in (source, published, f"score {item.get('score', 0)}", topics) if part)
+        if meta:
+            lines.append(f"   {meta}")
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            lines.append(f"   {summary[:280]}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _list_sources(state_dir: pathlib.Path) -> Dict[str, Any]:
+    config = _load_config(state_dir)
+    return {"ok": True, "sources": config.get("sources", []), "topics": config.get("topics", {})}
+
+
+def _upsert_source(state_dir: pathlib.Path, payload: Dict[str, Any]) -> Dict[str, Any]:
+    config = _load_config(state_dir)
+    sources = [dict(s) for s in config.get("sources", []) if isinstance(s, dict)]
+    action = str(payload.get("action") or "upsert").strip().lower()
+    source_id = str(payload.get("id") or "").strip()
+    if not source_id:
+        return {"ok": False, "error": "id is required"}
+    if action == "remove":
+        config["sources"] = [s for s in sources if str(s.get("id") or "") != source_id]
+        _save_config(state_dir, config)
+        return {"ok": True, "removed": source_id, "sources": config["sources"]}
+    kind = str(payload.get("kind") or "rss").strip().lower()
+    if kind not in {"rss", "atom", "telegram_public"}:
+        return {"ok": False, "error": "kind must be rss, atom, or telegram_public"}
+    source = {
+        "id": source_id,
+        "kind": kind,
+        "title": str(payload.get("title") or source_id).strip(),
+    }
+    if kind == "telegram_public":
+        channel = str(payload.get("channel") or "").strip().lstrip("@")
+        url = str(payload.get("url") or "").strip()
+        if not channel and not url:
+            return {"ok": False, "error": "telegram_public source requires channel or url"}
+        if channel:
+            source["channel"] = channel
+            source["url"] = f"https://t.me/s/{urllib.parse.quote(channel)}"
+        else:
+            source["url"] = _validate_url(url)
+    else:
+        source["url"] = _validate_url(str(payload.get("url") or ""))
+    sources = [s for s in sources if str(s.get("id") or "") != source_id]
+    sources.append(source)
+    config["sources"] = sources
+    _save_config(state_dir, config)
+    return {"ok": True, "source": source, "sources": sources}
+
+
+def _tool_refresh(*, state_dir: pathlib.Path, limit_per_source: int = 20, source_id: str = "") -> str:
+    return json.dumps(_refresh(state_dir, limit_per_source=limit_per_source, source_id=source_id), ensure_ascii=False, indent=2)
+
+
+def _tool_digest(*, state_dir: pathlib.Path, hours: int = 48, limit: int = 12, min_score: int = 1) -> str:
+    return json.dumps(_digest_items(state_dir, hours=hours, limit=limit, min_score=min_score), ensure_ascii=False, indent=2)
+
+
+def _tool_sources(*, state_dir: pathlib.Path) -> str:
+    return json.dumps(_list_sources(state_dir), ensure_ascii=False, indent=2)
+
+
+def _tool_source_upsert(
+    *,
+    state_dir: pathlib.Path,
+    id: str = "",
+    kind: str = "rss",
+    url: str = "",
+    title: str = "",
+    channel: str = "",
+    action: str = "upsert",
+) -> str:
+    return json.dumps(
+        _upsert_source(state_dir, {"id": id, "kind": kind, "url": url, "title": title, "channel": channel, "action": action}),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+async def _json_body(request: Request) -> Dict[str, Any]:
+    try:
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        form = await request.form()
+        return {str(k): v for k, v in form.items()}
+
+
+def register(api: Any) -> None:
+    state_dir = pathlib.Path(api.get_state_dir())
+
+    async def route_refresh(request: Request) -> JSONResponse:
+        body = await _json_body(request) if request.method != "GET" else {}
+        limit = int(body.get("limit_per_source") or request.query_params.get("limit_per_source") or 20)
+        source_id = str(body.get("source_id") or request.query_params.get("source_id") or "")
+        return JSONResponse(_refresh(state_dir, limit_per_source=limit, source_id=source_id))
+
+    async def route_digest(request: Request) -> JSONResponse:
+        hours = int(request.query_params.get("hours") or 48)
+        limit = int(request.query_params.get("limit") or 12)
+        min_score = int(request.query_params.get("min_score") or 1)
+        return JSONResponse(_digest_items(state_dir, hours=hours, limit=limit, min_score=min_score))
+
+    async def route_sources(request: Request) -> JSONResponse:
+        if request.method == "GET":
+            return JSONResponse(_list_sources(state_dir))
+        body = await _json_body(request)
+        status = _upsert_source(state_dir, body)
+        return JSONResponse(status, status_code=200 if status.get("ok") else 400)
+
+    api.register_tool(
+        "refresh",
+        lambda limit_per_source=20, source_id="": _tool_refresh(
+            state_dir=state_dir,
+            limit_per_source=int(limit_per_source or 20),
+            source_id=str(source_id or ""),
+        ),
+        description="Fetch configured RSS/Atom and public Telegram sources, deduplicate them, and update the research digest store.",
+        schema={
+            "type": "object",
+            "properties": {
+                "limit_per_source": {"type": "integer", "description": "Maximum items to read from each source."},
+                "source_id": {"type": "string", "description": "Optional single configured source id to refresh."},
+            },
+        },
+        timeout_sec=120,
+    )
+    api.register_tool(
+        "digest",
+        lambda hours=48, limit=12, min_score=1: _tool_digest(
+            state_dir=state_dir,
+            hours=int(hours or 48),
+            limit=int(limit or 12),
+            min_score=int(min_score or 1),
+        ),
+        description="Return a scored AI/ML/engineering/business research digest as JSON plus Telegram-ready markdown.",
+        schema={
+            "type": "object",
+            "properties": {
+                "hours": {"type": "integer", "description": "Lookback window in hours."},
+                "limit": {"type": "integer", "description": "Maximum digest items."},
+                "min_score": {"type": "integer", "description": "Minimum topic score."},
+            },
+        },
+        timeout_sec=20,
+    )
+    api.register_tool(
+        "sources",
+        lambda: _tool_sources(state_dir=state_dir),
+        description="List configured research digest sources and topic keywords.",
+        schema={"type": "object", "properties": {}},
+        timeout_sec=10,
+    )
+    api.register_tool(
+        "source_upsert",
+        lambda id="", kind="rss", url="", title="", channel="", action="upsert": _tool_source_upsert(
+            state_dir=state_dir,
+            id=str(id or ""),
+            kind=str(kind or "rss"),
+            url=str(url or ""),
+            title=str(title or ""),
+            channel=str(channel or ""),
+            action=str(action or "upsert"),
+        ),
+        description="Add, update, or remove a research digest source. Use kind=telegram_public with channel for public Telegram pages.",
+        schema={
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "kind": {"type": "string", "enum": ["rss", "atom", "telegram_public"]},
+                "url": {"type": "string"},
+                "title": {"type": "string"},
+                "channel": {"type": "string"},
+                "action": {"type": "string", "enum": ["upsert", "remove"]},
+            },
+            "required": ["id"],
+        },
+        timeout_sec=20,
+    )
+    api.register_route("refresh", route_refresh, methods=("POST", "GET"))
+    api.register_route("digest", route_digest, methods=("GET",))
+    api.register_route("sources", route_sources, methods=("GET", "POST"))
+    api.register_ui_tab(
+        "digest",
+        "Research digest",
+        icon="newspaper",
+        render={
+            "kind": "declarative",
+            "schema_version": 1,
+            "components": [
+                {
+                    "type": "form",
+                    "route": "refresh",
+                    "method": "POST",
+                    "target": "refresh",
+                    "submit_label": "Refresh",
+                    "fields": [{"name": "limit_per_source", "label": "Per source", "type": "number", "default": "20"}],
+                },
+                {
+                    "type": "status",
+                    "target": "refresh",
+                    "idle": "Refresh configured RSS/Atom and public Telegram sources.",
+                    "loading": "Fetching sources...",
+                    "error": "Refresh failed.",
+                    "success": "Refresh complete",
+                },
+                {
+                    "type": "form",
+                    "route": "digest",
+                    "method": "GET",
+                    "target": "digest",
+                    "submit_label": "Build digest",
+                    "fields": [
+                        {"name": "hours", "label": "Hours", "type": "number", "default": "48"},
+                        {"name": "limit", "label": "Items", "type": "number", "default": "12"},
+                    ],
+                },
+                {"type": "json", "target": "digest"},
+            ],
+        },
+    )
+    api.log("info", "research_digest: extension registered")
+
+
+__all__ = [
+    "register",
+    "_parse_rss_atom",
+    "_parse_telegram_public",
+    "_digest_items",
+    "_refresh",
+    "_upsert_source",
+]

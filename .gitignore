@@ -9,6 +9,10 @@
 .vscode/
 .idea/
 
+# Local agent knowledge notes (not tracked)
+.knoweledge/
+.knowledge/
+
 # Python
 __pycache__/
 *.pyc

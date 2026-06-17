@@ -477,6 +477,41 @@ body
     assert schedules[0]["trigger"]["expr"] == "0 * * * *"
 
 
+def test_skill_schedule_task_text_includes_manifest_description(tmp_path):
+    from ouroboros.contracts.skill_manifest import parse_skill_manifest_text
+    from supervisor import queue
+
+    queue.init(tmp_path, 600, 1800)
+    manifest = parse_skill_manifest_text("""---
+name: digest-demo
+description: Digest demo
+version: 0.1.0
+type: extension
+entry: plugin.py
+permissions: [supervised_task]
+scheduled_tasks:
+  - name: weekly
+    cron: "0 14 * * *"
+    description: "Refresh sources and build exactly 6 weekly AI research items."
+---
+body
+""")
+    skill = SimpleNamespace(
+        name="digest-demo",
+        manifest=manifest,
+        enabled=True,
+        load_error="",
+        content_hash="abc",
+        review=SimpleNamespace(status="pass", is_stale_for=lambda _hash: False),
+    )
+
+    queue.sync_skill_schedules([skill])
+    task_text = queue.list_scheduled_tasks()["tasks"][0]["task"]["text"]
+
+    assert "Task description:" in task_text
+    assert "exactly 6 weekly AI research items" in task_text
+
+
 def test_skill_schedule_sync_refreshes_next_run_on_cron_change(tmp_path):
     from ouroboros.contracts.skill_manifest import parse_skill_manifest_text
     from supervisor import queue
