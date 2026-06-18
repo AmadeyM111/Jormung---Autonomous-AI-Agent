@@ -281,6 +281,7 @@ def test_run_llm_loop_preserves_assistant_tool_call_metadata(tmp_path, monkeypat
         "reasoning": "I need the file first.",
         "reasoning_details": [{"type": "reasoning.text", "text": "I need the file first."}],
         "response_id": "gen-123",
+        "finish_reason": "tool_calls",
     }
     seen_second_request = {}
     calls = {"count": 0}
@@ -320,6 +321,7 @@ def test_run_llm_loop_preserves_assistant_tool_call_metadata(tmp_path, monkeypat
     assert assistant_msg["reasoning"] == assistant_metadata["reasoning"]
     assert assistant_msg["reasoning_details"] == assistant_metadata["reasoning_details"]
     assert assistant_msg["response_id"] == "gen-123"
+    assert "finish_reason" not in assistant_msg
 
 
 def test_run_llm_loop_keeps_task_model_override_across_tool_rounds(tmp_path, monkeypatch):

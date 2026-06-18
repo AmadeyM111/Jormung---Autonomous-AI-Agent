@@ -695,14 +695,24 @@ class LLMClient:
 
     @staticmethod
     def _strip_openrouter_roundtrip_metadata(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Strip OpenRouter reasoning round-trip fields for providers that reject extra message keys."""
+        """Strip response-only assistant metadata before messages re-enter a provider request."""
         cleaned = copy.deepcopy(messages)
         for msg in cleaned:
             if msg.get("role") != "assistant":
                 continue
+            msg.pop("finish_reason", None)
             msg.pop("reasoning", None)
             msg.pop("reasoning_details", None)
             msg.pop("response_id", None)
+        return cleaned
+
+    @staticmethod
+    def _strip_chat_response_metadata(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Strip assistant response metadata that is not valid Chat Completions input."""
+        cleaned = copy.deepcopy(messages)
+        for msg in cleaned:
+            if msg.get("role") == "assistant":
+                msg.pop("finish_reason", None)
         return cleaned
 
     @staticmethod
@@ -2006,10 +2016,12 @@ class LLMClient:
 
         kwargs: Dict[str, Any] = {
             "model": resolved_model,
-            "messages": self._copy_messages_with_cache_policy(
-                messages,
-                allow_message_cache_control=allow_message_cache,
-                flatten_tool_content_blocks=not allow_message_cache,
+            "messages": self._strip_chat_response_metadata(
+                self._copy_messages_with_cache_policy(
+                    messages,
+                    allow_message_cache_control=allow_message_cache,
+                    flatten_tool_content_blocks=not allow_message_cache,
+                )
             ),
             "max_tokens": max_tokens,
             "extra_body": extra_body,

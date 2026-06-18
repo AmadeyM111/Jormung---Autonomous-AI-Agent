@@ -81,6 +81,36 @@ def test_normalize_remote_response_preserves_choice_finish_reason(monkeypatch):
     assert usage["provider"] == "openai-compatible"
 
 
+def test_build_remote_kwargs_strips_assistant_finish_reason_for_strict_providers(monkeypatch):
+    monkeypatch.setenv("OPENAI_COMPATIBLE_API_KEY", "groq-key")
+    monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://api.groq.com/openai/v1")
+
+    client = LLMClient()
+    target = client._resolve_remote_target("openai-compatible::groq/compound")
+    kwargs = client._build_remote_kwargs(
+        target,
+        [
+            {"role": "user", "content": "lookup"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+                "finish_reason": "tool_calls",
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "ok"},
+        ],
+        "medium",
+        128,
+        "auto",
+        None,
+        None,
+    )
+
+    assistant_msg = next(item for item in kwargs["messages"] if item.get("role") == "assistant")
+    assert "finish_reason" not in assistant_msg
+    assert assistant_msg["tool_calls"][0]["id"] == "call-1"
+
+
 def test_openai_compatible_ollama_caps_default_max_tokens(monkeypatch):
     monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:11434/v1")
 

@@ -433,6 +433,14 @@ def _append_or_merge_user_message(messages: List[Dict[str, Any]], text: str) -> 
     _append_or_merge_user_content(messages, text)
 
 
+def _assistant_message_for_history(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Return an assistant message that is safe to replay in Chat Completions history."""
+    assistant_msg = dict(msg)
+    assistant_msg.setdefault("role", "assistant")
+    assistant_msg.pop("finish_reason", None)
+    return assistant_msg
+
+
 def _append_or_merge_user_content(messages: List[Dict[str, Any]], content: Any) -> None:
     """Append user content without flattening multipart blocks."""
     if messages and messages[-1].get("role") == "user":
@@ -1162,9 +1170,7 @@ def run_llm_loop(
 
             if getattr(tools._ctx, "_skill_finalization_injected", False):
                 tools._ctx._skill_finalization_injected = False
-            assistant_msg = dict(msg)
-            assistant_msg.setdefault("role", "assistant")
-            messages.append(assistant_msg)
+            messages.append(_assistant_message_for_history(msg))
 
             if content and content.strip():
                 emit_progress(content.strip())
