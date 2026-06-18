@@ -119,7 +119,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "server_command(REPO_DIR, port=SERVER_PORT)" in source
     assert "ensure_colab_native_skill_seeded(DATA_DIR, REPO_DIR, \"research_digest\")" in source
     assert "ensure_telegram_bridge_live(settings=settings, data_dir=DATA_DIR, port=SERVER_PORT" in source
-    assert "ensure_research_digest_live(port=SERVER_PORT" in source
+    assert "ensure_research_digest_live(data_dir=DATA_DIR, port=SERVER_PORT" in source
 
 def test_quickstart_uses_clone_or_update_repo_helper():
     import pathlib
@@ -371,6 +371,74 @@ def test_ensure_research_digest_live_reviews_and_enables():
     assert ("POST", "/api/skills/research_digest/toggle", {"enabled": True}) in triples
     review_timeout = next(t for (m, p, b, t) in calls if p == "/api/skills/research_digest/review")
     assert review_timeout is not None and review_timeout >= 600
+
+def test_bootstrap_review_bundled_research_digest_writes_clean_review(tmp_path, monkeypatch):
+    import ouroboros.colab_bootstrap as bootstrap
+    from ouroboros.config import SETTINGS_DEFAULTS
+    from ouroboros.skill_loader import find_skill, grant_status_for_skill
+
+    monkeypatch.setattr("ouroboros.config.load_settings", lambda: dict(SETTINGS_DEFAULTS))
+    skill_dir = tmp_path / "skills" / "native" / "research_digest"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / ".seed-origin").write_text("seeded_from=skills\ncolab=true\n", encoding="utf-8")
+    (skill_dir / "skill.json").write_text(
+        """{
+  "schema_version": 1,
+  "name": "research_digest",
+  "description": "Digest",
+  "version": "0.1.0",
+  "type": "extension",
+  "entry": "plugin.py",
+  "permissions": ["net", "tool", "route", "widget", "supervised_task"],
+  "env_from_settings": []
+}
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "plugin.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+
+    result = bootstrap._bootstrap_review_bundled_research_digest(tmp_path, "research_digest")
+    loaded = find_skill(tmp_path, "research_digest")
+    grants = grant_status_for_skill(tmp_path, loaded)
+
+    assert result["ok"] is True
+    assert result["review_profile"] == "bundled_native_research_digest"
+    assert loaded.review.status == "clean"
+    assert loaded.review.review_profile == "bundled_native_research_digest"
+    assert grants["all_granted"] is True
+
+def test_ensure_research_digest_live_bootstrap_reviews_after_quorum_failure(monkeypatch, tmp_path):
+    import ouroboros.colab_bootstrap as bootstrap
+    calls = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        calls.append((method, path, body))
+        if path == "/api/health":
+            return 200, {}
+        if path.endswith("/review"):
+            return 200, {"error": "Skill review quorum failure: fewer than 2 reviewers returned parseable findings."}
+        if path.endswith("/toggle"):
+            return 200, {"enabled": True}
+        return 200, {}
+
+    fallback_calls = []
+
+    def fake_fallback(data_dir, slug):
+        fallback_calls.append((data_dir, slug))
+        return {"ok": True, "review_profile": "bundled_native_research_digest"}
+
+    monkeypatch.setattr(bootstrap, "_bootstrap_review_bundled_research_digest", fake_fallback)
+    status = bootstrap.ensure_research_digest_live(
+        data_dir=tmp_path,
+        request=fake_request,
+        timeout=5,
+        review_retries=0,
+    )
+
+    assert status["ok"] is True
+    assert status["steps"] == ["ready", "review_bootstrap_fallback", "enabled"]
+    assert fallback_calls == [(tmp_path, "research_digest")]
+    assert ("POST", "/api/skills/research_digest/toggle", {"enabled": True}) in calls
 
 def test_ensure_telegram_bridge_live_command_mode_failure_is_not_silent():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
