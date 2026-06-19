@@ -13,7 +13,7 @@
       "name": "daily_ai_research_digest",
       "cron": "0 14 * * *",
       "timezone": "Europe/Moscow",
-      "description": "At 14:00 Moscow time, refresh configured RSS and public Telegram AI/Research sources, then build a weekly digest with exactly 6 highest-scoring items using research_digest.refresh(limit_per_source=30) and research_digest.digest(hours=168, limit=6, min_score=1). Return Telegram-ready markdown and mention source errors, if any."
+      "description": "At 14:00 Moscow time, prepare a weekly Telegram-ready digest with exactly 6 highest-scoring items using the research digest prepare_digest tool (hours=168, limit=6, min_score=1, refresh=true, limit_per_source=30). Return its final_response directly and mention source errors only if the tool reports them."
     }
   ],
   "ui_tab": {

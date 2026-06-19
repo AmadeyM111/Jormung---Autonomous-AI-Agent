@@ -165,6 +165,22 @@ def _truncate_tool_result(
     return s[:limit] + f"\n... (truncated from {len(s)} chars, limit={limit})"
 
 
+def _direct_final_response_from_tool(fn_name: str, result: Any) -> str:
+    """Allow reviewed extension tools to finish deterministic text workflows."""
+    if not str(fn_name or "").startswith("ext_"):
+        return ""
+    try:
+        payload = json.loads(str(result or ""))
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    if str(payload.get("final_response_mode") or "") != "direct":
+        return ""
+    final = str(payload.get("final_response") or "").strip()
+    return final if final else ""
+
+
 def _is_tool_execution_failure(tool_ok: bool, result: Any) -> bool:
     """Treat only executor/runtime failures as UI tool failures."""
     if not tool_ok:
@@ -838,6 +854,12 @@ def process_tool_results(
             "trace_ref": exec_result.get("trace_ref"),
             **(exec_result.get("result_meta") or {}),
         })
+        direct_final = "" if is_error else _direct_final_response_from_tool(fn_name, exec_result["result"])
+        if direct_final:
+            llm_trace["_direct_final_response"] = direct_final
+            llm_trace["reasoning_notes"].append(
+                f"{fn_name} returned a direct final response; skipped LLM rewrite."
+            )
         if fn_name == "task_acceptance_review" and not is_error:
             try:
                 parsed = json.loads(str(exec_result.get("result") or ""))

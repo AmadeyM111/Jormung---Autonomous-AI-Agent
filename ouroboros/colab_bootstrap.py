@@ -147,7 +147,19 @@ def ensure_colab_native_skill_seeded(
     if not any((source / candidate).is_file() for candidate in ("SKILL.md", "skill.json")):
         return {"ok": False, "slug": safe_slug, "error": f"bundled skill has no manifest: {source}"}
     if target.exists():
-        return {"ok": True, "slug": safe_slug, "changed": False, "target": str(target)}
+        marker = target / ".seed-origin"
+        if not marker.is_file():
+            return {"ok": True, "slug": safe_slug, "changed": False, "target": str(target)}
+        try:
+            shutil.rmtree(target)
+            shutil.copytree(source, target)
+            marker.write_text(
+                f"seeded_from={source.parent.name}\ncolab=true\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return {"ok": False, "slug": safe_slug, "error": f"resync failed: {exc}"}
+        return {"ok": True, "slug": safe_slug, "changed": True, "resynced": True, "target": str(target)}
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, target)

@@ -1180,6 +1180,10 @@ def run_llm_loop(
                 tool_calls, tools, drive_logs, task_id, stateful_executor,
                 messages, llm_trace, emit_progress
             )
+            direct_final = str(llm_trace.pop("_direct_final_response", "") or "").strip()
+            if direct_final:
+                emit_progress(direct_final)
+                return _handle_text_response(direct_final, llm_trace, accumulated_usage)
 
             budget_result = _check_budget_limits(
                 budget_remaining_usd, accumulated_usage, round_idx, messages,

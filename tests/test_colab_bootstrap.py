@@ -228,6 +228,29 @@ def test_ensure_colab_native_skill_seeded_keeps_existing_drive_skill(tmp_path):
     assert result["changed"] is False
     assert (target / "plugin.py").read_text(encoding="utf-8") == "VALUE = 1\n"
 
+def test_ensure_colab_native_skill_seeded_resyncs_seeded_drive_skill(tmp_path):
+    from ouroboros.colab_bootstrap import ensure_colab_native_skill_seeded
+
+    repo = tmp_path / "repo"
+    data = tmp_path / "data"
+    source = repo / "skills" / "research_digest"
+    target = data / "skills" / "native" / "research_digest"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    (source / "skill.json").write_text('{"name":"research_digest","version":"0.1.0"}\n', encoding="utf-8")
+    (source / "plugin.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (target / "skill.json").write_text('{"name":"research_digest","version":"old"}\n', encoding="utf-8")
+    (target / "plugin.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (target / ".seed-origin").write_text("seeded_from=skills\ncolab=true\n", encoding="utf-8")
+
+    result = ensure_colab_native_skill_seeded(data, repo, "research_digest")
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["resynced"] is True
+    assert (target / "plugin.py").read_text(encoding="utf-8") == "VALUE = 2\n"
+    assert (target / ".seed-origin").is_file()
+
 def test_patch_telegram_bridge_multi_user_updates_owner_only_snippets(tmp_path):
     from ouroboros.colab_bootstrap import patch_telegram_bridge_multi_user
 

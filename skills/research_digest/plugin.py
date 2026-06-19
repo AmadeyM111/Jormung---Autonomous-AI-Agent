@@ -109,6 +109,19 @@ def _parse_dt(value: Any) -> str:
     return parsed.astimezone(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _bool_arg(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value if value is not None else "").strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def _dt_value(value: Any) -> _dt.datetime:
     text = str(value or "").strip()
     if not text:
@@ -354,7 +367,27 @@ def _collect_source(source: Dict[str, Any], topics: Dict[str, Any], limit: int) 
     return {"source_id": source.get("id"), "items": items[: max(1, min(limit, 100))], "fetched_at": fetched_at}
 
 
-def _refresh(state_dir: pathlib.Path, *, limit_per_source: int = 20, source_id: str = "") -> Dict[str, Any]:
+def _compact_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Small LLM-facing projection; full records stay in records.json."""
+    topics = sorted((item.get("topic_matches") or {}).keys())
+    return {
+        "title": str(item.get("title") or "")[:220],
+        "url": str(item.get("url") or "")[:500],
+        "source": str(item.get("source_title") or item.get("source_id") or "")[:120],
+        "published_at": str(item.get("published_at") or item.get("fetched_at") or "")[:80],
+        "score": int(item.get("score") or 0),
+        "topics": topics[:8],
+        "summary": str(item.get("summary") or "")[:260],
+    }
+
+
+def _refresh(
+    state_dir: pathlib.Path,
+    *,
+    limit_per_source: int = 20,
+    source_id: str = "",
+    include_top: bool = True,
+) -> Dict[str, Any]:
     config = _load_config(state_dir)
     topics = config.get("topics") if isinstance(config.get("topics"), dict) else {}
     sources = [s for s in config.get("sources", []) if isinstance(s, dict)]
@@ -385,19 +418,27 @@ def _refresh(state_dir: pathlib.Path, *, limit_per_source: int = 20, source_id: 
                 new_count += 1
     records["items"] = list(by_id.values())
     _save_records(state_dir, records)
-    top = _digest_items(state_dir, hours=72, limit=8, min_score=1)["items"]
-    return {
+    status = {
         "ok": True,
         "sources_requested": len(sources),
         "sources_fetched": fetched,
         "new_items": new_count,
         "updated_items": updated_count,
         "errors": errors,
-        "top": top,
     }
+    if include_top:
+        status["top"] = _digest_items(state_dir, hours=72, limit=8, min_score=1, compact=True)["items"]
+    return status
 
 
-def _digest_items(state_dir: pathlib.Path, *, hours: int = 48, limit: int = 12, min_score: int = 1) -> Dict[str, Any]:
+def _digest_items(
+    state_dir: pathlib.Path,
+    *,
+    hours: int = 48,
+    limit: int = 12,
+    min_score: int = 1,
+    compact: bool = False,
+) -> Dict[str, Any]:
     records = _load_records(state_dir)
     cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=max(1, int(hours or 48)))
     items = []
@@ -412,7 +453,64 @@ def _digest_items(state_dir: pathlib.Path, *, hours: int = 48, limit: int = 12, 
         items.append(item)
     items.sort(key=lambda x: (int(x.get("score") or 0), _dt_value(x.get("published_at") or x.get("fetched_at"))), reverse=True)
     selected = items[: max(1, min(int(limit or 12), 50))]
-    return {"ok": True, "hours": hours, "limit": limit, "items": selected, "markdown": _to_markdown(selected)}
+    return {
+        "ok": True,
+        "hours": hours,
+        "limit": limit,
+        "items": [_compact_item(item) for item in selected] if compact else selected,
+        "markdown": _to_markdown(selected),
+    }
+
+
+def _prepare_digest(
+    state_dir: pathlib.Path,
+    *,
+    hours: int = 168,
+    limit: int = 6,
+    min_score: int = 1,
+    refresh: bool = True,
+    limit_per_source: int = 30,
+) -> Dict[str, Any]:
+    """Refresh if requested and return a Telegram-ready direct final response."""
+    refresh_status: Dict[str, Any] | None = None
+    if refresh:
+        refresh_status = _refresh(
+            state_dir,
+            limit_per_source=limit_per_source,
+            include_top=False,
+        )
+    digest = _digest_items(state_dir, hours=hours, limit=limit, min_score=min_score, compact=True)
+    lines = [str(digest.get("markdown") or "").strip()]
+    errors = (refresh_status or {}).get("errors") or []
+    if errors:
+        lines.append("")
+        lines.append("Source errors:")
+        for err in errors[:8]:
+            sid = str(err.get("source_id") or "source")
+            detail = str(err.get("error") or "unknown error")
+            lines.append(f"- {sid}: {detail[:220]}")
+        if len(errors) > 8:
+            lines.append(f"- ... and {len(errors) - 8} more")
+    final_response = "\n".join(part for part in lines if part is not None).strip()
+    return {
+        "ok": True,
+        "final_response_mode": "direct",
+        "final_response": final_response,
+        "refresh": {
+            "enabled": bool(refresh),
+            "sources_requested": (refresh_status or {}).get("sources_requested", 0),
+            "sources_fetched": (refresh_status or {}).get("sources_fetched", 0),
+            "new_items": (refresh_status or {}).get("new_items", 0),
+            "updated_items": (refresh_status or {}).get("updated_items", 0),
+            "errors": errors[:8],
+            "errors_omitted": max(0, len(errors) - 8),
+        },
+        "digest": {
+            "hours": digest.get("hours"),
+            "limit": digest.get("limit"),
+            "items": digest.get("items", []),
+        },
+    }
 
 
 def _to_markdown(items: List[Dict[str, Any]]) -> str:
@@ -481,11 +579,42 @@ def _upsert_source(state_dir: pathlib.Path, payload: Dict[str, Any]) -> Dict[str
 
 
 def _tool_refresh(*, state_dir: pathlib.Path, limit_per_source: int = 20, source_id: str = "") -> str:
-    return json.dumps(_refresh(state_dir, limit_per_source=limit_per_source, source_id=source_id), ensure_ascii=False, indent=2)
+    return json.dumps(
+        _refresh(state_dir, limit_per_source=limit_per_source, source_id=source_id),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def _tool_digest(*, state_dir: pathlib.Path, hours: int = 48, limit: int = 12, min_score: int = 1) -> str:
-    return json.dumps(_digest_items(state_dir, hours=hours, limit=limit, min_score=min_score), ensure_ascii=False, indent=2)
+    return json.dumps(
+        _digest_items(state_dir, hours=hours, limit=limit, min_score=min_score, compact=True),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def _tool_prepare_digest(
+    *,
+    state_dir: pathlib.Path,
+    hours: int = 168,
+    limit: int = 6,
+    min_score: int = 1,
+    refresh: bool = True,
+    limit_per_source: int = 30,
+) -> str:
+    return json.dumps(
+        _prepare_digest(
+            state_dir,
+            hours=hours,
+            limit=limit,
+            min_score=min_score,
+            refresh=_bool_arg(refresh, default=True),
+            limit_per_source=limit_per_source,
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def _tool_sources(*, state_dir: pathlib.Path) -> str:
@@ -556,6 +685,33 @@ def register(api: Any) -> None:
             },
         },
         timeout_sec=120,
+    )
+    api.register_tool(
+        "prepare_digest",
+        lambda hours=168, limit=6, min_score=1, refresh=True, limit_per_source=30: _tool_prepare_digest(
+            state_dir=state_dir,
+            hours=int(hours or 168),
+            limit=int(limit or 6),
+            min_score=int(min_score or 1),
+            refresh=_bool_arg(refresh, default=True),
+            limit_per_source=int(limit_per_source or 30),
+        ),
+        description=(
+            "Use this single tool for user requests to prepare/build/send a digest for Telegram. "
+            "It refreshes sources, builds a compact AI/ML/business digest, and returns a "
+            "Telegram-ready final_response that can be sent directly without another LLM rewrite."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "hours": {"type": "integer", "description": "Lookback window in hours."},
+                "limit": {"type": "integer", "description": "Maximum digest items."},
+                "min_score": {"type": "integer", "description": "Minimum topic score."},
+                "refresh": {"type": "boolean", "description": "Refresh sources before building the digest."},
+                "limit_per_source": {"type": "integer", "description": "Maximum items to read from each source during refresh."},
+            },
+        },
+        timeout_sec=150,
     )
     api.register_tool(
         "digest",
@@ -659,6 +815,7 @@ __all__ = [
     "_parse_rss_atom",
     "_parse_telegram_public",
     "_digest_items",
+    "_prepare_digest",
     "_refresh",
     "_upsert_source",
 ]

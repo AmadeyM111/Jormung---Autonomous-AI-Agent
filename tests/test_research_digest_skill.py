@@ -72,3 +72,54 @@ def test_research_digest_digest_markdown_orders_by_score(tmp_path):
 
     assert digest["items"][0]["id"] == "high"
     assert "[AI agents for production ML](https://example.com/high)" in digest["markdown"]
+
+
+def test_research_digest_prepare_digest_returns_direct_compact_response(tmp_path):
+    now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    long_summary = "Business implementation notes. " * 80
+    records = {
+        "schema_version": 1,
+        "items": [
+            {
+                "id": "high",
+                "title": "AI agents for production ML",
+                "url": "https://example.com/high",
+                "source_title": "High",
+                "summary": long_summary,
+                "published_at": now,
+                "fetched_at": now,
+                "score": 9,
+                "topic_matches": {"ai": ["ai"], "ml_business": ["business"]},
+            },
+        ],
+    }
+    (tmp_path / "records.json").write_text(json.dumps(records), encoding="utf-8")
+
+    prepared = plugin._prepare_digest(pathlib.Path(tmp_path), refresh=False, hours=48, limit=1)
+
+    assert prepared["final_response_mode"] == "direct"
+    assert "[AI agents for production ML](https://example.com/high)" in prepared["final_response"]
+    assert prepared["refresh"]["enabled"] is False
+    assert len(prepared["digest"]["items"][0]["summary"]) < len(long_summary)
+
+
+def test_direct_final_response_is_extension_only():
+    from ouroboros.loop_tool_execution import _direct_final_response_from_tool
+
+    payload = json.dumps(
+        {
+            "ok": True,
+            "final_response_mode": "direct",
+            "final_response": "ready markdown",
+        }
+    )
+
+    assert _direct_final_response_from_tool("ext_17_r_research_digest_prepare_digest", payload) == "ready markdown"
+    assert _direct_final_response_from_tool("read_file", payload) == ""
+
+
+def test_tool_prepare_digest_parses_string_false_refresh(tmp_path):
+    payload = json.loads(plugin._tool_prepare_digest(state_dir=pathlib.Path(tmp_path), refresh="false"))
+
+    assert payload["ok"] is True
+    assert payload["refresh"]["enabled"] is False

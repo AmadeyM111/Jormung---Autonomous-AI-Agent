@@ -10,10 +10,11 @@ It keeps the base Ouroboros runtime untouched and adds:
 - URL/title-based deduplication.
 - Topic scoring for AI, engineering, ML in production, agentic systems,
   business adoption, and research.
-- Agent-callable tools for refresh, digest, source listing, and source updates.
+- Agent-callable tools for refresh, compact digest generation, one-shot
+  Telegram-ready digest preparation, source listing, and source updates.
 - A daily schedule entry that reminds the agent to refresh and summarize.
 
 The skill stores only its own state under `api.get_state_dir()`. It does not
-request provider keys and does not publish to Telegram by itself; generated
-markdown can be reviewed and posted through an existing Telegram transport or
-copy workflow.
+request provider keys and does not publish to Telegram by itself. For Telegram
+requests, use the `prepare_digest` tool and return its `final_response` directly;
+this avoids an extra LLM rewrite on low-TPM providers.
