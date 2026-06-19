@@ -159,7 +159,22 @@ def _maybe_run_research_digest_direct(
 
     args = {"hours": 168, "limit": 6, "min_score": 1, "refresh": True, "limit_per_source": 30}
     emit_progress("Preparing research digest...")
-    result = tools_registry.execute(tool_name, args)
+    ctx = getattr(tools_registry, "_ctx", None)
+    sentinel = object()
+    previous_trusted = getattr(ctx, "_trusted_direct_extension_tool", sentinel) if ctx is not None else sentinel
+    if ctx is not None:
+        setattr(ctx, "_trusted_direct_extension_tool", tool_name)
+    try:
+        result = tools_registry.execute(tool_name, args)
+    finally:
+        if ctx is not None:
+            if previous_trusted is sentinel:
+                try:
+                    delattr(ctx, "_trusted_direct_extension_tool")
+                except AttributeError:
+                    pass
+            else:
+                setattr(ctx, "_trusted_direct_extension_tool", previous_trusted)
     final = _direct_final_response_from_tool(tool_name, result)
     if not final:
         final = str(result or "").strip()

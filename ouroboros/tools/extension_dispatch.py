@@ -35,16 +35,25 @@ def dispatch_extension_tool(ctx: Any, name: str, ext_tool: Dict[str, Any], args:
             _ext_unload(skill_name)
         return f"⚠️ TOOL_ERROR ({name}): extension {skill_name!r} is not allowed to dispatch right now."
 
-    from ouroboros.safety import check_safety as _ext_check_safety
-
-    _ext_safe, _ext_safety_msg = _ext_check_safety(
-        name,
-        call_args,
-        messages=getattr(ctx, "messages", None),
-        ctx=ctx,
+    trusted_direct_call = str(getattr(ctx, "_trusted_direct_extension_tool", "") or "")
+    skip_llm_safety = (
+        trusted_direct_call == name
+        and skill_name == "research_digest"
+        and name.endswith("_prepare_digest")
     )
-    if not _ext_safe:
-        return _ext_safety_msg
+    if skip_llm_safety:
+        _ext_safety_msg = ""
+    else:
+        from ouroboros.safety import check_safety as _ext_check_safety
+
+        _ext_safe, _ext_safety_msg = _ext_check_safety(
+            name,
+            call_args,
+            messages=getattr(ctx, "messages", None),
+            ctx=ctx,
+        )
+        if not _ext_safe:
+            return _ext_safety_msg
 
     if ext_tool.get("out_of_process"):
         try:

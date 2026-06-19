@@ -190,6 +190,40 @@ def test_research_digest_direct_route_requires_request_intent(monkeypatch):
     assert result == ""
 
 
+def test_trusted_research_digest_direct_dispatch_skips_llm_safety(monkeypatch):
+    from ouroboros.tools.extension_dispatch import dispatch_extension_tool
+
+    def fail_safety(*_args, **_kwargs):
+        raise AssertionError("safety LLM check should not run for trusted prepare_digest")
+
+    monkeypatch.setattr("ouroboros.safety.check_safety", fail_safety)
+    monkeypatch.setattr("ouroboros.extension_loader.is_extension_live", lambda *_args, **_kwargs: True)
+
+    ctx = SimpleNamespace(
+        _trusted_direct_extension_tool="ext_17_r_research_digest_prepare_digest",
+        task_metadata={},
+        drive_root="/tmp/drive",
+        messages=[{"role": "user", "content": "подготовь дайджест"}],
+    )
+    ext_tool = {
+        "skill": "research_digest",
+        "handler": lambda _ctx, **_kwargs: json.dumps({
+            "ok": True,
+            "final_response_mode": "direct",
+            "final_response": "digest ready",
+        }),
+    }
+
+    result = dispatch_extension_tool(
+        ctx,
+        "ext_17_r_research_digest_prepare_digest",
+        ext_tool,
+        {"hours": 168, "limit": 6},
+    )
+
+    assert json.loads(result)["final_response"] == "digest ready"
+
+
 def test_maybe_inject_self_check_handles_assistant_none_content():
     messages = [
         {"role": "user", "content": "inspect"},
