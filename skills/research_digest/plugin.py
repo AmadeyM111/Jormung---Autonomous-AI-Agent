@@ -676,7 +676,11 @@ def register(api: Any) -> None:
             limit_per_source=int(limit_per_source or 20),
             source_id=str(source_id or ""),
         ),
-        description="Fetch configured RSS/Atom and public Telegram sources, deduplicate them, and update the research digest store.",
+        description=(
+            "Fetch configured RSS/Atom and public Telegram sources, deduplicate them, and update the "
+            "research digest store. Do not use this for a user-facing Telegram digest request; use "
+            "prepare_digest instead."
+        ),
         schema={
             "type": "object",
             "properties": {

@@ -104,6 +104,45 @@ Sure, I will use the tool now.
         self.assertEqual(args["content"], "hello world")
         self.assertEqual(args["path"], "test.txt")
 
+    def test_parses_provider_safe_legacy_tool_call(self):
+        from ouroboros.llm import LLMClient
+
+        msg = {
+            "content": '<ext_17_r_research_digest_prepare_digest>{"hours": 168, "limit": 6}',
+            "tool_calls": [],
+        }
+
+        parsed = LLMClient._parse_legacy_tool_calls_from_content(
+            msg,
+            {"ext_17_r_research_digest_prepare_digest"},
+        )
+
+        self.assertEqual(len(parsed["tool_calls"]), 1)
+        self.assertIsNone(parsed["content"])
+        self.assertEqual(
+            parsed["tool_calls"][0]["function"]["name"],
+            "ext_17_r_research_digest_prepare_digest",
+        )
+        self.assertEqual(
+            json.loads(parsed["tool_calls"][0]["function"]["arguments"]),
+            {"hours": 168, "limit": 6},
+        )
+
+    def test_rejects_mixed_provider_safe_legacy_tool_call(self):
+        from ouroboros.llm import LLMClient
+
+        msg = {
+            "content": 'Use this:\n<ext_17_r_research_digest_refresh>{"limit_per_source": 10}',
+            "tool_calls": [],
+        }
+
+        parsed = LLMClient._parse_legacy_tool_calls_from_content(
+            msg,
+            {"ext_17_r_research_digest_refresh"},
+        )
+
+        self.assertEqual(parsed, msg)
+
 
 class TestStripReasoningWrappers(unittest.TestCase):
     """Tests for LLMClient._strip_reasoning_wrappers."""

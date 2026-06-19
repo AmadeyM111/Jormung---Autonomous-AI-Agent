@@ -1218,6 +1218,72 @@ class LLMClient:
         return msg
 
     @staticmethod
+    def _parse_legacy_tool_calls_from_content(
+        msg: Dict[str, Any],
+        allowed_tool_names: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Parse provider-safe ``<tool_name>{...}`` text when it is the whole reply."""
+        content = str(msg.get("content", "") or "")
+        stripped_raw = content.strip()
+        if not stripped_raw:
+            return msg
+        stripped_raw = stripped_raw.replace("\x1b[200~", "").replace("\x1b[201~", "").strip()
+        stripped, reasoning = LLMClient._strip_reasoning_wrappers(stripped_raw)
+        if not stripped:
+            return msg
+
+        match = re.fullmatch(
+            r"<(?P<name>[A-Za-z0-9_-]{1,64})>\s*(?P<args>\{.*\})\s*",
+            stripped,
+            re.DOTALL,
+        )
+        if not match:
+            return msg
+        name = match.group("name").strip()
+        allowed = {tool_name for tool_name in (allowed_tool_names or set()) if tool_name}
+        if allowed and name not in allowed:
+            log.warning("Rejected text tool call for unknown tool %r", name)
+            return msg
+        try:
+            args = json.loads(match.group("args").strip())
+        except json.JSONDecodeError as exc:
+            log.warning("Rejected text tool call with invalid JSON args for %s: %s", name, exc)
+            return msg
+        if not isinstance(args, dict):
+            log.warning("Rejected text tool call with non-object args for %s", name)
+            return msg
+
+        msg = dict(msg)
+        msg["tool_calls"] = [{
+            "id": "call_text_0",
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(args),
+            },
+        }]
+        msg["content"] = reasoning or None
+        log.info("Parsed text tool call from provider output: %s", name)
+        return msg
+
+    @staticmethod
+    def _parse_text_tool_calls_from_content(
+        msg: Dict[str, Any],
+        tools: Optional[List[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        if msg.get("tool_calls") or not msg.get("content") or not tools:
+            return msg
+        allowed_tool_names = {
+            str(t.get("function", {}).get("name", "")).strip()
+            for t in tools
+            if isinstance(t, dict)
+        }
+        parsed = LLMClient._parse_tool_calls_from_content(msg, allowed_tool_names)
+        if parsed is not msg and parsed.get("tool_calls"):
+            return parsed
+        return LLMClient._parse_legacy_tool_calls_from_content(msg, allowed_tool_names)
+
+    @staticmethod
     def _stringify_anthropic_content(value: Any) -> str:
         if value is None:
             return ""
@@ -2229,12 +2295,13 @@ class LLMClient:
                     target,
                 )
                 # Skip cost fetch here; it would re-enter OS proxy lookup.
-                return self._normalize_remote_response(
+                msg, usage = self._normalize_remote_response(
                     resp.model_dump(),
                     target,
                     skip_cost_fetch=True,
                     prompt_cache_ttl=prompt_cache_ttl,
                 )
+                return self._parse_text_tool_calls_from_content(msg, tools), usage
             finally:
                 try:
                     _http_client.close()
@@ -2254,11 +2321,12 @@ class LLMClient:
             kwargs,
             target,
         )
-        return self._normalize_remote_response(
+        msg, usage = self._normalize_remote_response(
             resp.model_dump(),
             target,
             prompt_cache_ttl=prompt_cache_ttl,
         )
+        return self._parse_text_tool_calls_from_content(msg, tools), usage
 
     def vision_query(
         self,
