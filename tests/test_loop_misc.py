@@ -139,6 +139,57 @@ def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeyp
     assert names == ["ext_research_refresh"]
 
 
+def test_minimal_context_runs_research_digest_direct_route(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+    tool_name = "ext_17_r_research_digest_prepare_digest"
+    calls = []
+    progress = []
+
+    class FakeTools:
+        def execute(self, name, args):
+            calls.append((name, args))
+            return json.dumps({
+                "ok": True,
+                "final_response_mode": "direct",
+                "final_response": "# AI/ML research digest\n\n1. Item",
+            })
+
+    def fake_get_tool(name):
+        if name == tool_name:
+            return {"name": name, "skill": "research_digest"}
+        return None
+
+    monkeypatch.setattr("ouroboros.extension_loader.get_tool", fake_get_tool)
+    trace = {"reasoning_notes": [], "tool_calls": []}
+
+    result = loop_mod._maybe_run_research_digest_direct(
+        messages=[{"role": "user", "content": "[Message from my human]: подготовь дайджест"}],
+        tools_registry=FakeTools(),
+        tool_schemas=[{"type": "function", "function": {"name": tool_name}}],
+        llm_trace=trace,
+        emit_progress=progress.append,
+    )
+
+    assert result.startswith("# AI/ML research digest")
+    assert calls == [(tool_name, {"hours": 168, "limit": 6, "min_score": 1, "refresh": True, "limit_per_source": 30})]
+    assert progress == ["Preparing research digest..."]
+    assert trace["tool_calls"][0]["tool"] == tool_name
+
+
+def test_research_digest_direct_route_requires_request_intent(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+
+    result = loop_mod._maybe_run_research_digest_direct(
+        messages=[{"role": "user", "content": "где хранится код research digest?"}],
+        tools_registry=SimpleNamespace(execute=lambda *_a, **_k: "should not run"),
+        tool_schemas=[{"type": "function", "function": {"name": "ext_17_r_research_digest_prepare_digest"}}],
+        llm_trace={"reasoning_notes": [], "tool_calls": []},
+        emit_progress=lambda _text: None,
+    )
+
+    assert result == ""
+
+
 def test_maybe_inject_self_check_handles_assistant_none_content():
     messages = [
         {"role": "user", "content": "inspect"},

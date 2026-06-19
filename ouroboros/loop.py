@@ -25,6 +25,7 @@ from ouroboros.utils import estimate_tokens
 from ouroboros.loop_tool_execution import (
     StatefulToolExecutor,
     handle_tool_calls,
+    _direct_final_response_from_tool,
     _truncate_tool_result,
     _TOOL_RESULT_LIMITS,
     _DEFAULT_TOOL_RESULT_LIMIT,
@@ -78,6 +79,101 @@ def _minimal_context_tool_schemas(tools_registry) -> Optional[List[Dict[str, Any
     except Exception:
         log.debug("Failed to build minimal-context extension tool schemas", exc_info=True)
     return out or None
+
+
+def _message_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _latest_user_text(messages: List[Dict[str, Any]]) -> str:
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            return _message_text(msg.get("content"))
+    return ""
+
+
+def _looks_like_research_digest_request(text: str) -> bool:
+    low = str(text or "").lower()
+    if "[message from my human]:" in low:
+        low = low.split("[message from my human]:", 1)[1]
+    if "дайджест" not in low and "digest" not in low:
+        return False
+    request_markers = (
+        "подготов", "состав", "сдел", "дай ", "дайджест",
+        "prepare", "build", "make", "generate", "send",
+    )
+    return any(marker in low for marker in request_markers)
+
+
+def _research_digest_prepare_tool_name(tool_schemas: Optional[List[Dict[str, Any]]]) -> str:
+    if not tool_schemas:
+        return ""
+    try:
+        from ouroboros.extension_loader import get_tool as _ext_get_tool
+    except Exception:
+        return ""
+    for schema in tool_schemas:
+        name = str(schema.get("function", {}).get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            ext_tool = _ext_get_tool(name)
+        except Exception:
+            ext_tool = None
+        if (
+            ext_tool
+            and str(ext_tool.get("skill") or "") == "research_digest"
+            and name.endswith("_prepare_digest")
+        ):
+            return name
+    return ""
+
+
+def _maybe_run_research_digest_direct(
+    *,
+    messages: List[Dict[str, Any]],
+    tools_registry,
+    tool_schemas: Optional[List[Dict[str, Any]]],
+    llm_trace: Dict[str, Any],
+    emit_progress: Callable[[str], None],
+) -> str:
+    """Bypass fragile provider tool-calling for the common Telegram digest request."""
+    if not minimal_context_enabled():
+        return ""
+    user_text = _latest_user_text(messages)
+    if not _looks_like_research_digest_request(user_text):
+        return ""
+    tool_name = _research_digest_prepare_tool_name(tool_schemas)
+    if not tool_name:
+        return ""
+
+    args = {"hours": 168, "limit": 6, "min_score": 1, "refresh": True, "limit_per_source": 30}
+    emit_progress("Preparing research digest...")
+    result = tools_registry.execute(tool_name, args)
+    final = _direct_final_response_from_tool(tool_name, result)
+    if not final:
+        final = str(result or "").strip()
+    llm_trace["tool_calls"].append({
+        "tool": tool_name,
+        "args": args,
+        "result": _truncate_tool_result(result, tool_name, args),
+        "is_error": str(result or "").startswith("⚠️"),
+        "status": "direct_intent_route",
+    })
+    llm_trace["reasoning_notes"].append(
+        "research_digest prepare_digest executed directly for a minimal-context digest request."
+    )
+    return final
 
 
 @dataclass
@@ -969,6 +1065,15 @@ def run_llm_loop(
     tools._ctx.event_queue = event_queue
     tools._ctx.task_id = task_id
     tools._ctx.messages = messages
+    direct_research_digest = _maybe_run_research_digest_direct(
+        messages=messages,
+        tools_registry=tools,
+        tool_schemas=tool_schemas,
+        llm_trace=llm_trace,
+        emit_progress=emit_progress,
+    )
+    if direct_research_digest:
+        return _handle_text_response(direct_research_digest, llm_trace, accumulated_usage)
     stateful_executor = StatefulToolExecutor()
     _owner_msg_seen: set = set()
     try:
