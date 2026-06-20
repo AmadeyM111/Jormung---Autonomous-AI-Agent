@@ -71,7 +71,9 @@ def test_research_digest_digest_markdown_orders_by_score(tmp_path):
     digest = plugin._digest_items(pathlib.Path(tmp_path), hours=48, limit=2, min_score=1)
 
     assert digest["items"][0]["id"] == "high"
-    assert "[AI agents for production ML](https://example.com/high)" in digest["markdown"]
+    assert "1. AI agents for production ML" in digest["markdown"]
+    assert "Link: https://example.com/high" in digest["markdown"]
+    assert "TL;DR" in digest["markdown"]
 
 
 def test_research_digest_prepare_digest_returns_direct_compact_response(tmp_path):
@@ -98,7 +100,8 @@ def test_research_digest_prepare_digest_returns_direct_compact_response(tmp_path
     prepared = plugin._prepare_digest(pathlib.Path(tmp_path), refresh=False, hours=48, limit=1)
 
     assert prepared["final_response_mode"] == "direct"
-    assert "[AI agents for production ML](https://example.com/high)" in prepared["final_response"]
+    assert "1. AI agents for production ML" in prepared["final_response"]
+    assert "Link: https://example.com/high" in prepared["final_response"]
     assert prepared["refresh"]["enabled"] is False
     assert len(prepared["digest"]["items"][0]["summary"]) < len(long_summary)
 
@@ -140,6 +143,37 @@ def test_research_digest_prepare_digest_diversifies_sources(tmp_path):
     assert selected_sources.count("arXiv cs.AI") == 2
     assert "AWS ML" in selected_sources
     assert "Google Research" in selected_sources
+
+
+def test_research_digest_markdown_cleans_arxiv_summary_noise(tmp_path):
+    now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    records = {
+        "schema_version": 1,
+        "items": [
+            {
+                "id": "paper",
+                "title": "Predictive Validity for LLM Agents",
+                "url": "https://example.com/paper",
+                "source_title": "arXiv cs.AI",
+                "summary": (
+                    "arXiv:2606.19704v1 Announce Type: new Abstract: "
+                    "Agent benchmarks are growing fast, but no single benchmark "
+                    "captures deployment risk."
+                ),
+                "published_at": now,
+                "fetched_at": now,
+                "score": 21,
+                "topic_matches": {"ai": ["ai"], "agentic_systems": ["agents"]},
+            },
+        ],
+    }
+    (tmp_path / "records.json").write_text(json.dumps(records), encoding="utf-8")
+
+    digest = plugin._digest_items(pathlib.Path(tmp_path), hours=48, limit=1, min_score=1)
+
+    assert "arXiv:2606" not in digest["markdown"]
+    assert "Announce Type" not in digest["markdown"]
+    assert "Why it matters: Agent benchmarks are growing fast" in digest["markdown"]
 
 
 def test_direct_final_response_is_extension_only():

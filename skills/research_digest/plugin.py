@@ -378,7 +378,7 @@ def _compact_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "published_at": str(item.get("published_at") or item.get("fetched_at") or "")[:80],
         "score": int(item.get("score") or 0),
         "topics": topics[:8],
-        "summary": str(item.get("summary") or "")[:260],
+        "summary": _clean_summary(item.get("summary"))[:260],
     }
 
 
@@ -552,7 +552,7 @@ def _prepare_digest(
     if refresh_status is not None:
         lines.append("")
         lines.append(
-            "Sources refreshed: "
+            "Updated sources: "
             + (", ".join(str(src) for src in fetched_source_ids[:8]) if fetched_source_ids else "none")
         )
     if errors:
@@ -588,25 +588,92 @@ def _prepare_digest(
     }
 
 
+def _clean_summary(value: Any, *, limit: int = 360) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return ""
+    text = re.sub(r"(?i)\barxiv:\d{4}\.\d+(?:v\d+)?\s*", "", text).strip()
+    text = re.sub(r"(?i)\bannounce type:\s*\w+\s*", "", text).strip()
+    text = re.sub(r"(?i)^abstract:\s*", "", text).strip()
+    text = re.sub(r"(?i)\s+abstract:\s*", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rstrip()
+    sentence_end = max(cut.rfind("."), cut.rfind("!"), cut.rfind("?"))
+    if sentence_end >= 120:
+        return cut[: sentence_end + 1]
+    return cut.rstrip(" ,;:") + "..."
+
+
+def _format_date(value: Any) -> str:
+    dt_value = _dt_value(value)
+    if dt_value.timestamp() <= 0:
+        return ""
+    return dt_value.strftime("%Y-%m-%d UTC")
+
+
+def _topic_label(topic: str) -> str:
+    labels = {
+        "agentic_systems": "agents",
+        "ml_business": "ML business",
+        "engineering": "engineering",
+        "research": "research",
+        "ai": "AI",
+    }
+    return labels.get(topic, topic.replace("_", " "))
+
+
+def _digest_tldr(items: List[Dict[str, Any]]) -> List[str]:
+    if not items:
+        return []
+    topic_counts: Dict[str, int] = {}
+    source_counts: Dict[str, int] = {}
+    for item in items:
+        for topic in (item.get("topic_matches") or {}).keys():
+            topic_counts[str(topic)] = topic_counts.get(str(topic), 0) + 1
+        source = str(item.get("source_title") or item.get("source_id") or "").strip()
+        if source:
+            source_counts[source] = source_counts.get(source, 0) + 1
+    top_topics = sorted(topic_counts.items(), key=lambda pair: (-pair[1], pair[0]))[:3]
+    top_sources = sorted(source_counts.items(), key=lambda pair: (-pair[1], pair[0]))[:3]
+    out = [
+        f"{len(items)} selected items from {len(source_counts) or 1} source(s).",
+    ]
+    if top_topics:
+        out.append("Main themes: " + ", ".join(f"{_topic_label(k)} x{v}" for k, v in top_topics) + ".")
+    if top_sources:
+        out.append("Source mix: " + ", ".join(f"{name} x{count}" for name, count in top_sources) + ".")
+    return out
+
+
 def _to_markdown(items: List[Dict[str, Any]]) -> str:
     if not items:
         return "No matching items yet. Run refresh or add more sources."
-    lines = ["# AI/ML research digest", ""]
+    lines = ["AI/ML research digest", ""]
+    lines.append("TL;DR")
+    for bullet in _digest_tldr(items):
+        lines.append(f"- {bullet}")
+    lines.append("")
+    lines.append("Items")
     for idx, item in enumerate(items, 1):
         title = str(item.get("title") or "Untitled").strip()
         url = str(item.get("url") or "").strip()
         source = str(item.get("source_title") or item.get("source_id") or "").strip()
-        topics = ", ".join(sorted((item.get("topic_matches") or {}).keys()))
-        published = str(item.get("published_at") or item.get("fetched_at") or "").strip()
-        heading = f"{idx}. [{title}]({url})" if url else f"{idx}. {title}"
-        lines.append(heading)
-        meta = " | ".join(part for part in (source, published, f"score {item.get('score', 0)}", topics) if part)
-        if meta:
-            lines.append(f"   {meta}")
-        summary = str(item.get("summary") or "").strip()
-        if summary:
-            lines.append(f"   {summary[:280]}")
+        topics = ", ".join(_topic_label(topic) for topic in sorted((item.get("topic_matches") or {}).keys()))
+        published = _format_date(item.get("published_at") or item.get("fetched_at"))
+        score = int(item.get("score") or 0)
         lines.append("")
+        lines.append(f"{idx}. {title}")
+        meta = " | ".join(part for part in (source, published, f"score {score}") if part)
+        if meta:
+            lines.append(f"Source: {meta}")
+        summary = _clean_summary(item.get("summary"))
+        if summary:
+            lines.append(f"Why it matters: {summary}")
+        if topics:
+            lines.append(f"Topics: {topics}")
+        if url:
+            lines.append(f"Link: {url}")
     return "\n".join(lines).strip()
 
 
