@@ -155,7 +155,19 @@ def test_minimal_context_answers_model_question_directly(monkeypatch):
     assert "openai-compatible::gemma4:31b-cloud" in answer
     assert "openai-compatible::groq/compound" in answer
     assert "openrouter::reserve/model" in answer
-    assert "ext_17_r_research_digest_digest" not in answer
+    assert "ext_" not in answer
+
+
+def test_minimal_context_answers_capabilities_question_directly(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+
+    answer = loop_mod._maybe_answer_capabilities_question_direct(
+        [{"role": "user", "content": "[Message from my human]: Чем ты можешь мне помочь?"}],
+    )
+
+    assert "готовить AI/ML дайджест" in answer
+    assert "подготовь дайджест" in answer
+    assert "ext_" not in answer
 
 
 def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeypatch):

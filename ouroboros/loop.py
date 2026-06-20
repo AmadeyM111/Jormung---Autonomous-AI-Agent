@@ -128,6 +128,24 @@ def _looks_like_model_question(text: str) -> bool:
     )
 
 
+def _looks_like_capabilities_question(text: str) -> bool:
+    low = str(text or "").lower()
+    if "[message from my human]:" in low:
+        low = low.split("[message from my human]:", 1)[1]
+    return bool(
+        "чем ты можешь" in low
+        or "что ты можешь" in low
+        or "как ты можешь помочь" in low
+        or "чем можешь помочь" in low
+        or "what can you do" in low
+        or "how can you help" in low
+    )
+
+
+def _mentions_internal_tool_name(text: str) -> bool:
+    return "ext_" in str(text or "").lower()
+
+
 def _fallback_model_candidates(active_model: str) -> List[str]:
     raw_candidates = [
         os.environ.get("OUROBOROS_MODEL_FALLBACK", ""),
@@ -151,7 +169,8 @@ def _fallback_model_candidates(active_model: str) -> List[str]:
 def _maybe_answer_model_question_direct(messages: List[Dict[str, Any]], active_model: str) -> str:
     if not minimal_context_enabled():
         return ""
-    if not _looks_like_model_question(_latest_user_text(messages)):
+    user_text = _latest_user_text(messages)
+    if not _looks_like_model_question(user_text):
         return ""
     fallbacks = _fallback_model_candidates(active_model)
     lines = [
@@ -164,8 +183,23 @@ def _maybe_answer_model_question_direct(messages: List[Dict[str, Any]], active_m
             lines.append(f"{idx}. `{model}`")
     else:
         lines.append("Fallback chain не настроен.")
-    lines.append("Внутренние `ext_...` имена - это tools, не модель.")
+    if _mentions_internal_tool_name(user_text):
+        lines.append("Внутренние `ext_...` имена - это tools, не модель.")
     return "\n".join(lines)
+
+
+def _maybe_answer_capabilities_question_direct(messages: List[Dict[str, Any]]) -> str:
+    if not minimal_context_enabled():
+        return ""
+    if not _looks_like_capabilities_question(_latest_user_text(messages)):
+        return ""
+    return (
+        "Я могу помогать с задачами по проекту и в Telegram: отвечать на вопросы, "
+        "готовить AI/ML дайджест, разбирать ошибки, читать и править код, запускать "
+        "тесты, фиксировать выводы в `.knowledge` и готовить изменения к push.\n\n"
+        "Для дайджеста напиши: `подготовь дайджест`.\n"
+        "Для разработки опиши цель или ошибку и ожидаемый результат."
+    )
 
 
 def _research_digest_prepare_tool_name(tool_schemas: Optional[List[Dict[str, Any]]]) -> str:
@@ -1136,6 +1170,9 @@ def run_llm_loop(
     direct_model_answer = _maybe_answer_model_question_direct(messages, active_model)
     if direct_model_answer:
         return _handle_text_response(direct_model_answer, llm_trace, accumulated_usage)
+    direct_capabilities_answer = _maybe_answer_capabilities_question_direct(messages)
+    if direct_capabilities_answer:
+        return _handle_text_response(direct_capabilities_answer, llm_trace, accumulated_usage)
     direct_research_digest = _maybe_run_research_digest_direct(
         messages=messages,
         tools_registry=tools,
