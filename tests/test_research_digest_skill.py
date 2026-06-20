@@ -103,6 +103,45 @@ def test_research_digest_prepare_digest_returns_direct_compact_response(tmp_path
     assert len(prepared["digest"]["items"][0]["summary"]) < len(long_summary)
 
 
+def test_research_digest_prepare_digest_diversifies_sources(tmp_path):
+    now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    items = []
+    for idx in range(4):
+        items.append({
+            "id": f"arxiv-{idx}",
+            "title": f"arXiv AI agents paper {idx}",
+            "url": f"https://example.com/arxiv/{idx}",
+            "source_id": "arxiv_cs_ai",
+            "source_title": "arXiv cs.AI",
+            "summary": "AI agents benchmark research.",
+            "published_at": now,
+            "fetched_at": now,
+            "score": 20 - idx,
+            "topic_matches": {"ai": ["ai"], "agentic_systems": ["agents"]},
+        })
+    for source_id, title, score in (("aws_ml_blog", "AWS ML", 12), ("google_research", "Google Research", 11)):
+        items.append({
+            "id": source_id,
+            "title": f"{title} production AI case",
+            "url": f"https://example.com/{source_id}",
+            "source_id": source_id,
+            "source_title": title,
+            "summary": "Enterprise AI deployment notes.",
+            "published_at": now,
+            "fetched_at": now,
+            "score": score,
+            "topic_matches": {"ai": ["ai"], "ml_business": ["enterprise"]},
+        })
+    (tmp_path / "records.json").write_text(json.dumps({"schema_version": 1, "items": items}), encoding="utf-8")
+
+    prepared = plugin._prepare_digest(pathlib.Path(tmp_path), refresh=False, hours=48, limit=4, max_per_source=2)
+    selected_sources = [item["source"] for item in prepared["digest"]["items"]]
+
+    assert selected_sources.count("arXiv cs.AI") == 2
+    assert "AWS ML" in selected_sources
+    assert "Google Research" in selected_sources
+
+
 def test_direct_final_response_is_extension_only():
     from ouroboros.loop_tool_execution import _direct_final_response_from_tool
 

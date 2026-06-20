@@ -34,6 +34,7 @@ _USER_AGENT = "Ouroboros-ResearchDigest/0.1"
 _CONFIG_FILE = "config.json"
 _RECORDS_FILE = "records.json"
 _MAX_STORED_ITEMS = 600
+_DEFAULT_MAX_PER_SOURCE = 2
 
 _DEFAULT_CONFIG: Dict[str, Any] = {
     "schema_version": 1,
@@ -381,6 +382,56 @@ def _compact_item(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _source_key(item: Dict[str, Any]) -> str:
+    return str(item.get("source_id") or item.get("source_title") or "source").strip() or "source"
+
+
+def _select_diverse_items(items: List[Dict[str, Any]], *, limit: int, max_per_source: int) -> List[Dict[str, Any]]:
+    target = max(1, min(int(limit or 12), 50))
+    cap = max(1, int(max_per_source or _DEFAULT_MAX_PER_SOURCE))
+    selected: List[Dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    counts: Dict[str, int] = {}
+
+    # First pass: one best item per source, preserving score/date ordering.
+    for item in items:
+        if len(selected) >= target:
+            break
+        src = _source_key(item)
+        if counts.get(src, 0) > 0:
+            continue
+        item_id = str(item.get("id") or _fingerprint(item))
+        selected.append(item)
+        selected_ids.add(item_id)
+        counts[src] = 1
+
+    # Second pass: fill remaining slots, capped per source where possible.
+    for item in items:
+        if len(selected) >= target:
+            break
+        item_id = str(item.get("id") or _fingerprint(item))
+        if item_id in selected_ids:
+            continue
+        src = _source_key(item)
+        if counts.get(src, 0) >= cap:
+            continue
+        selected.append(item)
+        selected_ids.add(item_id)
+        counts[src] = counts.get(src, 0) + 1
+
+    # Last resort: if only one/few sources exist, fill the requested limit.
+    for item in items:
+        if len(selected) >= target:
+            break
+        item_id = str(item.get("id") or _fingerprint(item))
+        if item_id in selected_ids:
+            continue
+        selected.append(item)
+        selected_ids.add(item_id)
+
+    return selected
+
+
 def _refresh(
     state_dir: pathlib.Path,
     *,
@@ -396,6 +447,7 @@ def _refresh(
     records = _load_records(state_dir)
     by_id = {str(item.get("id") or _fingerprint(item)): dict(item) for item in records.get("items", []) if isinstance(item, dict)}
     errors: List[Dict[str, str]] = []
+    fetched_sources: List[str] = []
     fetched = 0
     new_count = 0
     updated_count = 0
@@ -407,6 +459,7 @@ def _refresh(
             errors.append({"source_id": sid, "error": f"{type(exc).__name__}: {exc}"})
             continue
         fetched += 1
+        fetched_sources.append(sid)
         for item in result["items"]:
             item_id = _fingerprint(item)
             item["id"] = item_id
@@ -422,6 +475,7 @@ def _refresh(
         "ok": True,
         "sources_requested": len(sources),
         "sources_fetched": fetched,
+        "fetched_source_ids": fetched_sources,
         "new_items": new_count,
         "updated_items": updated_count,
         "errors": errors,
@@ -438,6 +492,7 @@ def _digest_items(
     limit: int = 12,
     min_score: int = 1,
     compact: bool = False,
+    max_per_source: int = 0,
 ) -> Dict[str, Any]:
     records = _load_records(state_dir)
     cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=max(1, int(hours or 48)))
@@ -452,7 +507,10 @@ def _digest_items(
             continue
         items.append(item)
     items.sort(key=lambda x: (int(x.get("score") or 0), _dt_value(x.get("published_at") or x.get("fetched_at"))), reverse=True)
-    selected = items[: max(1, min(int(limit or 12), 50))]
+    if int(max_per_source or 0) > 0:
+        selected = _select_diverse_items(items, limit=int(limit or 12), max_per_source=int(max_per_source))
+    else:
+        selected = items[: max(1, min(int(limit or 12), 50))]
     return {
         "ok": True,
         "hours": hours,
@@ -470,6 +528,7 @@ def _prepare_digest(
     min_score: int = 1,
     refresh: bool = True,
     limit_per_source: int = 30,
+    max_per_source: int = _DEFAULT_MAX_PER_SOURCE,
 ) -> Dict[str, Any]:
     """Refresh if requested and return a Telegram-ready direct final response."""
     refresh_status: Dict[str, Any] | None = None
@@ -479,9 +538,23 @@ def _prepare_digest(
             limit_per_source=limit_per_source,
             include_top=False,
         )
-    digest = _digest_items(state_dir, hours=hours, limit=limit, min_score=min_score, compact=True)
+    digest = _digest_items(
+        state_dir,
+        hours=hours,
+        limit=limit,
+        min_score=min_score,
+        compact=True,
+        max_per_source=max_per_source,
+    )
     lines = [str(digest.get("markdown") or "").strip()]
     errors = (refresh_status or {}).get("errors") or []
+    fetched_source_ids = (refresh_status or {}).get("fetched_source_ids") or []
+    if refresh_status is not None:
+        lines.append("")
+        lines.append(
+            "Sources refreshed: "
+            + (", ".join(str(src) for src in fetched_source_ids[:8]) if fetched_source_ids else "none")
+        )
     if errors:
         lines.append("")
         lines.append("Source errors:")
@@ -500,6 +573,7 @@ def _prepare_digest(
             "enabled": bool(refresh),
             "sources_requested": (refresh_status or {}).get("sources_requested", 0),
             "sources_fetched": (refresh_status or {}).get("sources_fetched", 0),
+            "fetched_source_ids": fetched_source_ids[:20],
             "new_items": (refresh_status or {}).get("new_items", 0),
             "updated_items": (refresh_status or {}).get("updated_items", 0),
             "errors": errors[:8],
@@ -508,6 +582,7 @@ def _prepare_digest(
         "digest": {
             "hours": digest.get("hours"),
             "limit": digest.get("limit"),
+            "max_per_source": max_per_source,
             "items": digest.get("items", []),
         },
     }
@@ -602,6 +677,7 @@ def _tool_prepare_digest(
     min_score: int = 1,
     refresh: bool = True,
     limit_per_source: int = 30,
+    max_per_source: int = _DEFAULT_MAX_PER_SOURCE,
 ) -> str:
     return json.dumps(
         _prepare_digest(
@@ -611,6 +687,7 @@ def _tool_prepare_digest(
             min_score=min_score,
             refresh=_bool_arg(refresh, default=True),
             limit_per_source=limit_per_source,
+            max_per_source=max_per_source,
         ),
         ensure_ascii=False,
         indent=2,
@@ -692,18 +769,19 @@ def register(api: Any) -> None:
     )
     api.register_tool(
         "prepare_digest",
-        lambda hours=168, limit=6, min_score=1, refresh=True, limit_per_source=30: _tool_prepare_digest(
+        lambda hours=168, limit=6, min_score=1, refresh=True, limit_per_source=30, max_per_source=_DEFAULT_MAX_PER_SOURCE: _tool_prepare_digest(
             state_dir=state_dir,
             hours=int(hours or 168),
             limit=int(limit or 6),
             min_score=int(min_score or 1),
             refresh=_bool_arg(refresh, default=True),
             limit_per_source=int(limit_per_source or 30),
+            max_per_source=int(max_per_source or _DEFAULT_MAX_PER_SOURCE),
         ),
         description=(
             "Use this single tool for user requests to prepare/build/send a digest for Telegram. "
-            "It refreshes sources, builds a compact AI/ML/business digest, and returns a "
-            "Telegram-ready final_response that can be sent directly without another LLM rewrite."
+            "It refreshes sources, builds a compact source-diverse AI/ML/business digest, and returns "
+            "a Telegram-ready final_response that can be sent directly without another LLM rewrite."
         ),
         schema={
             "type": "object",
@@ -713,6 +791,7 @@ def register(api: Any) -> None:
                 "min_score": {"type": "integer", "description": "Minimum topic score."},
                 "refresh": {"type": "boolean", "description": "Refresh sources before building the digest."},
                 "limit_per_source": {"type": "integer", "description": "Maximum items to read from each source during refresh."},
+                "max_per_source": {"type": "integer", "description": "Preferred maximum selected digest items per source."},
             },
         },
         timeout_sec=150,
