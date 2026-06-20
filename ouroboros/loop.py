@@ -149,10 +149,12 @@ def _mentions_internal_tool_name(text: str) -> bool:
 def _fallback_model_candidates(active_model: str) -> List[str]:
     raw_candidates = [
         os.environ.get("OUROBOROS_MODEL_FALLBACK", ""),
-        # Compatibility aliases for Colab/operator envs. The canonical key stays
-        # OUROBOROS_MODEL_FALLBACK because settings/defaults already use it.
+        # Deprecated env-only alias for operator typo compatibility. Do not add
+        # it to settings/defaults; the canonical key is OUROBOROS_MODEL_FALLBACK.
         os.environ.get("OUROBOROS_FALLBACK_MODEL", ""),
         os.environ.get("OUROBOROS_MODEL_RESERVE", ""),
+        # Deprecated env-only alias for operator typo compatibility. Do not add
+        # it to settings/defaults; the canonical key is OUROBOROS_MODEL_RESERVE.
         os.environ.get("OUROBOROS_RESERVE_MODEL", ""),
     ]
     out: List[str] = []

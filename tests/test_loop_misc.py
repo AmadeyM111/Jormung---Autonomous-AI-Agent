@@ -170,6 +170,13 @@ def test_minimal_context_answers_capabilities_question_directly(monkeypatch):
     assert "ext_" not in answer
 
 
+def test_reserve_model_alias_is_env_only_not_setting_key():
+    from ouroboros.config import SETTINGS_DEFAULTS
+
+    assert "OUROBOROS_MODEL_RESERVE" in SETTINGS_DEFAULTS
+    assert "OUROBOROS_RESERVE_MODEL" not in SETTINGS_DEFAULTS
+
+
 def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeypatch):
     from ouroboros import extension_loader
     from ouroboros.tools.registry import ToolRegistry
