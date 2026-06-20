@@ -115,6 +115,59 @@ def _looks_like_research_digest_request(text: str) -> bool:
     return any(marker in low for marker in request_markers)
 
 
+def _looks_like_model_question(text: str) -> bool:
+    low = str(text or "").lower()
+    if "[message from my human]:" in low:
+        low = low.split("[message from my human]:", 1)[1]
+    return bool(
+        "какая ты модель" in low
+        or "какую модель" in low
+        or "что за модель" in low
+        or "what model" in low
+        or "which model" in low
+    )
+
+
+def _fallback_model_candidates(active_model: str) -> List[str]:
+    raw_candidates = [
+        os.environ.get("OUROBOROS_MODEL_FALLBACK", ""),
+        # Compatibility aliases for Colab/operator envs. The canonical key stays
+        # OUROBOROS_MODEL_FALLBACK because settings/defaults already use it.
+        os.environ.get("OUROBOROS_FALLBACK_MODEL", ""),
+        os.environ.get("OUROBOROS_MODEL_RESERVE", ""),
+        os.environ.get("OUROBOROS_RESERVE_MODEL", ""),
+    ]
+    out: List[str] = []
+    seen = {str(active_model or "").strip()}
+    for raw in raw_candidates:
+        model = str(raw or "").strip()
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        out.append(model)
+    return out
+
+
+def _maybe_answer_model_question_direct(messages: List[Dict[str, Any]], active_model: str) -> str:
+    if not minimal_context_enabled():
+        return ""
+    if not _looks_like_model_question(_latest_user_text(messages)):
+        return ""
+    fallbacks = _fallback_model_candidates(active_model)
+    lines = [
+        "Я Jormung. Текущий основной model slot:",
+        f"`{active_model}`",
+    ]
+    if fallbacks:
+        lines.append("Fallback chain:")
+        for idx, model in enumerate(fallbacks, 1):
+            lines.append(f"{idx}. `{model}`")
+    else:
+        lines.append("Fallback chain не настроен.")
+    lines.append("Внутренние `ext_...` имена - это tools, не модель.")
+    return "\n".join(lines)
+
+
 def _research_digest_prepare_tool_name(tool_schemas: Optional[List[Dict[str, Any]]]) -> str:
     if not tool_schemas:
         return ""
@@ -1080,6 +1133,9 @@ def run_llm_loop(
     tools._ctx.event_queue = event_queue
     tools._ctx.task_id = task_id
     tools._ctx.messages = messages
+    direct_model_answer = _maybe_answer_model_question_direct(messages, active_model)
+    if direct_model_answer:
+        return _handle_text_response(direct_model_answer, llm_trace, accumulated_usage)
     direct_research_digest = _maybe_run_research_digest_direct(
         messages=messages,
         tools_registry=tools,
@@ -1180,8 +1236,8 @@ def run_llm_loop(
             tools._ctx._current_llm_call_meta = dict(accumulated_usage.get("_last_llm_call_meta") or {})
 
             if msg is None:
-                fallback_model = os.environ.get("OUROBOROS_MODEL_FALLBACK", "").strip()
-                if not fallback_model or fallback_model == active_model:
+                fallback_models = _fallback_model_candidates(active_model)
+                if not fallback_models:
                     local_tag = " (local)" if active_use_local else ""
                     return (
                         f"⚠️ Failed to get a response from model {active_model}{local_tag} after {max_retries} attempts. "
@@ -1189,21 +1245,30 @@ def run_llm_loop(
                         f"{_provider_recovery_hint(accumulated_usage)}"
                     ), accumulated_usage, llm_trace
 
-                fallback_use_local = os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
                 primary_tag = " (local)" if active_use_local else ""
-                fallback_tag = " (local)" if fallback_use_local else ""
-                llm_trace["reasoning_notes"].append(
-                    f"Fallback: {active_model}{primary_tag} -> {fallback_model}{fallback_tag} after empty response"
-                )
-                msg, fallback_cost = call_llm_with_retry(
-                    llm, messages, fallback_model, tool_schemas, active_effort,
-                    max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
-                    use_local=fallback_use_local,
-                )
+                attempted_fallbacks: List[str] = []
+                for fallback_idx, fallback_model in enumerate(fallback_models):
+                    fallback_use_local = (
+                        fallback_idx == 0
+                        and os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
+                    )
+                    fallback_tag = " (local)" if fallback_use_local else ""
+                    attempted_fallbacks.append(f"{fallback_model}{fallback_tag}")
+                    llm_trace["reasoning_notes"].append(
+                        f"Fallback: {active_model}{primary_tag} -> {fallback_model}{fallback_tag} after empty response"
+                    )
+                    msg, fallback_cost = call_llm_with_retry(
+                        llm, messages, fallback_model, tool_schemas, active_effort,
+                        max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
+                        use_local=fallback_use_local,
+                    )
+                    if msg is not None:
+                        break
 
                 if msg is None:
+                    fallback_label = ", ".join(attempted_fallbacks) if attempted_fallbacks else "(none)"
                     return (
-                        f"⚠️ All models are down. Primary ({active_model}{primary_tag}) and fallback ({fallback_model}{fallback_tag}) "
+                        f"⚠️ All models are down. Primary ({active_model}{primary_tag}) and fallback chain ({fallback_label}) "
                         f"both returned no response. Stopping.{_provider_failure_hint(accumulated_usage)} "
                         f"{_provider_recovery_hint(accumulated_usage)}"
                     ), accumulated_usage, llm_trace
