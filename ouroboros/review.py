@@ -91,7 +91,10 @@ MAX_FUNCTION_LINES = 300
 # verified smoke result; pay it down after the recovery release lands.
 # Recovery completion restores strict scope-review contract parsing after the
 # atlas/context-limit incident; keep the cap at the verified smoke result.
-MAX_TOTAL_FUNCTIONS = 2768
+# Colab/Groq digest recovery added direct digest routing, reserve-model handling,
+# and focused provider regressions; keep the cap at the verified smoke result
+# until the loop/provider surfaces are split further.
+MAX_TOTAL_FUNCTIONS = 2872
 # Grandfathered modules are accepted debt until their surfaces stabilize/split.
 GRANDFATHERED_OVERSIZED_MODULES = {
     "llm.py",

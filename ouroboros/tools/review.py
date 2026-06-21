@@ -5,6 +5,7 @@ import json
 import asyncio
 import logging
 import pathlib
+import tempfile
 from typing import Any, List, Optional
 
 from ouroboros.llm import LLMClient
@@ -217,22 +218,37 @@ def _review_query_error_payload(
         drive_root = _review_drive_root(ctx)
         task_id = str(getattr(ctx, "task_id", "") or "multi_model_review") if ctx is not None else "multi_model_review"
         call_id = new_call_id(f"review_multi_model_review_{slot_id}_error")
-        payload["prompt_ref"] = persist_call(
-            drive_root,
-            task_id=task_id,
-            call_id=f"{call_id}_prompt",
-            call_type="multi_model_review_prompt",
-            payload={"messages": messages, "slot_id": slot_id, "model": model},
-            manifest={"surface": "multi_model_review", "slot_id": slot_id, "model": model, "synthetic": True},
-        )
-        payload["response_ref"] = persist_call(
-            drive_root,
-            task_id=task_id,
-            call_id=f"{call_id}_error",
-            call_type="multi_model_review_error",
-            payload={"error": error},
-            manifest={"surface": "multi_model_review", "slot_id": slot_id, "model": model, "status": "error", "synthetic": True},
-        )
+
+        def _persist_refs(root: pathlib.Path, *, fallback_root: bool = False) -> None:
+            manifest_base = {
+                "surface": "multi_model_review",
+                "slot_id": slot_id,
+                "model": model,
+                "synthetic": True,
+            }
+            if fallback_root:
+                manifest_base["fallback_root"] = True
+            payload["prompt_ref"] = persist_call(
+                root,
+                task_id=task_id,
+                call_id=f"{call_id}_prompt",
+                call_type="multi_model_review_prompt",
+                payload={"messages": messages, "slot_id": slot_id, "model": model},
+                manifest=manifest_base,
+            )
+            payload["response_ref"] = persist_call(
+                root,
+                task_id=task_id,
+                call_id=f"{call_id}_error",
+                call_type="multi_model_review_error",
+                payload={"error": error},
+                manifest={**manifest_base, "status": "error"},
+            )
+
+        try:
+            _persist_refs(drive_root)
+        except Exception:
+            _persist_refs(pathlib.Path(tempfile.mkdtemp(prefix="ouroboros-review-error-")), fallback_root=True)
     except Exception:
         pass
     return payload

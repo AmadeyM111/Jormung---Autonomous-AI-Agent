@@ -113,6 +113,7 @@ def test_build_remote_kwargs_strips_assistant_finish_reason_for_strict_providers
 
 def test_openai_compatible_ollama_caps_default_max_tokens(monkeypatch):
     monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.delenv("OPENAI_COMPATIBLE_MAX_TOKENS", raising=False)
 
     client = LLMClient()
     target = client._resolve_remote_target("openai-compatible::qwen3-30b-a3b-16k")
@@ -188,6 +189,7 @@ def test_openai_compatible_max_tokens_zero_disables_cap(monkeypatch):
 
 def test_openai_compatible_remote_endpoint_keeps_max_tokens_by_default(monkeypatch):
     monkeypatch.setenv("OPENAI_COMPATIBLE_BASE_URL", "https://llm.example.test/v1")
+    monkeypatch.delenv("OPENAI_COMPATIBLE_MAX_TOKENS", raising=False)
 
     client = LLMClient()
     target = client._resolve_remote_target("openai-compatible::custom-model")

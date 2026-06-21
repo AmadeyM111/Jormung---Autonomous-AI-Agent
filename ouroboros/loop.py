@@ -1127,6 +1127,59 @@ def _run_round_compaction(
     return messages, None
 
 
+def _try_fallback_chain_after_empty_response(
+    *,
+    llm: LLMClient,
+    messages: List[Dict[str, Any]],
+    active_model: str,
+    active_use_local: bool,
+    tool_schemas: Optional[List[Dict[str, Any]]],
+    active_effort: str,
+    max_retries: int,
+    drive_logs: pathlib.Path,
+    task_id: str,
+    round_idx: int,
+    event_queue: Optional[queue.Queue],
+    accumulated_usage: Dict[str, Any],
+    task_type: str,
+    llm_trace: Dict[str, Any],
+) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
+    fallback_models = _fallback_model_candidates(active_model)
+    primary_tag = " (local)" if active_use_local else ""
+    if not fallback_models:
+        return None, (
+            f"⚠️ Failed to get a response from model {active_model}{primary_tag} after {max_retries} attempts. "
+            f"No viable fallback model configured.{_provider_failure_hint(accumulated_usage)} "
+            f"{_provider_recovery_hint(accumulated_usage)}"
+        )
+
+    attempted_fallbacks: List[str] = []
+    for fallback_idx, fallback_model in enumerate(fallback_models):
+        fallback_use_local = (
+            fallback_idx == 0
+            and os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
+        )
+        fallback_tag = " (local)" if fallback_use_local else ""
+        attempted_fallbacks.append(f"{fallback_model}{fallback_tag}")
+        llm_trace["reasoning_notes"].append(
+            f"Fallback: {active_model}{primary_tag} -> {fallback_model}{fallback_tag} after empty response"
+        )
+        msg, _fallback_cost = call_llm_with_retry(
+            llm, messages, fallback_model, tool_schemas, active_effort,
+            max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
+            use_local=fallback_use_local,
+        )
+        if msg is not None:
+            return msg, None
+
+    fallback_label = ", ".join(attempted_fallbacks) if attempted_fallbacks else "(none)"
+    return None, (
+        f"⚠️ All models are down. Primary ({active_model}{primary_tag}) and fallback chain ({fallback_label}) "
+        f"both returned no response. Stopping.{_provider_failure_hint(accumulated_usage)} "
+        f"{_provider_recovery_hint(accumulated_usage)}"
+    )
+
+
 def run_llm_loop(
     messages: List[Dict[str, Any]],
     tools: ToolRegistry,
@@ -1150,15 +1203,12 @@ def run_llm_loop(
         active_use_local = bool(ctx.task_use_local_override)
     else:
         active_use_local = os.environ.get("USE_LOCAL_MAIN", "").lower() in ("true", "1")
-    # Low context mode compacts the transcript sooner and enables remote routine compaction.
     active_context_mode = get_context_mode()
-
     llm_trace: Dict[str, Any] = {"reasoning_notes": [], "tool_calls": []}
     accumulated_usage: Dict[str, Any] = {}
     max_retries = 3
     from ouroboros.tools import tool_discovery as _td
     _td.set_registry(tools)
-
     if minimal_context_enabled():
         tool_schemas = _minimal_context_tool_schemas(tools)
         _enabled_extra_tools = {}
@@ -1229,8 +1279,6 @@ def run_llm_loop(
 
             _drain_incoming_messages(messages, incoming_messages, drive_root, task_id, event_queue, _owner_msg_seen)
 
-            # Inject after owner messages so the checkpoint is the LLM-call tail.
-            # It is a normal user turn; only routine compaction is skipped below.
             _checkpoint_injected = _maybe_inject_self_check(
                 round_idx, MAX_ROUNDS, messages, accumulated_usage, emit_progress,
                 event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
@@ -1264,7 +1312,6 @@ def run_llm_loop(
                     _compaction_usage.get("prompt_cache_ttl"))
                 emit_llm_usage_event(event_queue, task_id, _cm, _compaction_usage, _cc, "compaction")
 
-            # Provider cache boundary; unsupported providers strip cache_control in llm.py.
             seal_task_transcript(messages)
 
             msg, cost = call_llm_with_retry(
@@ -1275,42 +1322,24 @@ def run_llm_loop(
             tools._ctx._current_llm_call_meta = dict(accumulated_usage.get("_last_llm_call_meta") or {})
 
             if msg is None:
-                fallback_models = _fallback_model_candidates(active_model)
-                if not fallback_models:
-                    local_tag = " (local)" if active_use_local else ""
-                    return (
-                        f"⚠️ Failed to get a response from model {active_model}{local_tag} after {max_retries} attempts. "
-                        f"No viable fallback model configured.{_provider_failure_hint(accumulated_usage)} "
-                        f"{_provider_recovery_hint(accumulated_usage)}"
-                    ), accumulated_usage, llm_trace
-
-                primary_tag = " (local)" if active_use_local else ""
-                attempted_fallbacks: List[str] = []
-                for fallback_idx, fallback_model in enumerate(fallback_models):
-                    fallback_use_local = (
-                        fallback_idx == 0
-                        and os.environ.get("USE_LOCAL_FALLBACK", "").lower() in ("true", "1")
-                    )
-                    fallback_tag = " (local)" if fallback_use_local else ""
-                    attempted_fallbacks.append(f"{fallback_model}{fallback_tag}")
-                    llm_trace["reasoning_notes"].append(
-                        f"Fallback: {active_model}{primary_tag} -> {fallback_model}{fallback_tag} after empty response"
-                    )
-                    msg, fallback_cost = call_llm_with_retry(
-                        llm, messages, fallback_model, tool_schemas, active_effort,
-                        max_retries, drive_logs, task_id, round_idx, event_queue, accumulated_usage, task_type,
-                        use_local=fallback_use_local,
-                    )
-                    if msg is not None:
-                        break
-
-                if msg is None:
-                    fallback_label = ", ".join(attempted_fallbacks) if attempted_fallbacks else "(none)"
-                    return (
-                        f"⚠️ All models are down. Primary ({active_model}{primary_tag}) and fallback chain ({fallback_label}) "
-                        f"both returned no response. Stopping.{_provider_failure_hint(accumulated_usage)} "
-                        f"{_provider_recovery_hint(accumulated_usage)}"
-                    ), accumulated_usage, llm_trace
+                msg, fallback_error = _try_fallback_chain_after_empty_response(
+                    llm=llm,
+                    messages=messages,
+                    active_model=active_model,
+                    active_use_local=active_use_local,
+                    tool_schemas=tool_schemas,
+                    active_effort=active_effort,
+                    max_retries=max_retries,
+                    drive_logs=drive_logs,
+                    task_id=task_id,
+                    round_idx=round_idx,
+                    event_queue=event_queue,
+                    accumulated_usage=accumulated_usage,
+                    task_type=task_type,
+                    llm_trace=llm_trace,
+                )
+                if fallback_error:
+                    return fallback_error, accumulated_usage, llm_trace
 
             tool_calls = msg.get("tool_calls") or []
             content = msg.get("content")
