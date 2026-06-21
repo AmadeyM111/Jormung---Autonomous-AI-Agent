@@ -43,7 +43,7 @@ def test_build_colab_settings_groq_profile_clears_local_runtime():
     assert out["OUROBOROS_EFFORT_TASK"] == "low"
     assert out["OUROBOROS_MODEL"] == expected_model
     assert out["OUROBOROS_MODEL_CODE"] == expected_model
-    assert out["OUROBOROS_MODEL_FALLBACK"] == "openai-compatible::llama-3.1-8b-instant"
+    assert out["OUROBOROS_MODEL_FALLBACK"] == ""
     assert out["OUROBOROS_REVIEW_MODELS"] == f"{expected_model},{expected_model}"
     assert out["LOCAL_MODEL_SOURCE"] == ""
     assert out["LOCAL_MODEL_FILENAME"] == ""
@@ -64,7 +64,17 @@ def test_build_colab_settings_groq_profile_defaults_to_low_context_mode():
     })
     assert out["OUROBOROS_CONTEXT_MODE"] == "low"
     assert out["OUROBOROS_MODEL"] == "openai-compatible::groq/compound"
-    assert out["OUROBOROS_MODEL_FALLBACK"] == "openai-compatible::llama-3.1-8b-instant"
+    assert out["OUROBOROS_MODEL_FALLBACK"] == ""
+
+def test_build_colab_settings_groq_profile_uses_openrouter_qwen_fallback_when_key_present():
+    from ouroboros.colab_bootstrap import build_colab_settings
+    out = build_colab_settings({
+        "GROQ_API_KEY": "gsk_test_key_1234567890",
+        "OPENROUTER_API_KEY": "sk-or-test",
+    })
+    assert out["OUROBOROS_MODEL"] == "openai-compatible::groq/compound"
+    assert out["OPENROUTER_API_KEY"] == "sk-or-test"
+    assert out["OUROBOROS_MODEL_FALLBACK"] == "qwen/qwen3.6-flash"
 
 def test_build_colab_settings_groq_profile_overrides_stale_large_drive_limits():
     from ouroboros.colab_bootstrap import build_colab_settings
@@ -104,7 +114,8 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "Running Groq smoke test..." in source
     assert "blocked at the project level" in source
     assert "GROQ_FALLBACK_MODELS" in source
-    assert "llama-3.1-8b-instant" in source
+    assert "llama-3.1-8b-instant" not in source
+    assert "llama-3.3-70b-versatile" in source
     assert "Using Groq fallback model:" in source
     assert source.index("apply_settings_to_env(settings)") < source.index("smoke = _run_groq_smoke(settings)")
     assert "smoke_env" in source

@@ -171,13 +171,13 @@ class TestInferApiKeyType:
         ("google/gemini-3.5-flash", "openrouter"),
         ("openai/gpt-5.2", "openrouter"),
         ("x-ai/grok-3-mini", "openrouter"),
+        ("qwen/qwen3.6-flash", "openrouter"),
     ])
     def test_openrouter_prefixes(self, model, expected):
         assert infer_api_key_type(model) == expected
 
     @pytest.mark.parametrize("model,expected", [
         ("groq/compound", "groq"),
-        ("qwen/qwen3.6-flash", "qwen"),
         ("groq::compound", "groq"),
         ("qwen::qwen3.6-flash", "qwen"),
     ])

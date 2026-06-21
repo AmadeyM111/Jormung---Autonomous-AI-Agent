@@ -447,8 +447,6 @@ class LLMClient:
                 return provider, model_name[len(prefix):].strip()
         if model_name.startswith("groq/"):
             return "groq", model_name
-        if model_name.startswith("qwen/"):
-            return "qwen", model_name
         return "openrouter", model_name
 
     @staticmethod
@@ -551,9 +549,14 @@ class LLMClient:
             }
 
         if provider == "qwen":
+            api_model = (
+                resolved_model[len("qwen/"):]
+                if resolved_model.startswith("qwen/")
+                else resolved_model
+            )
             return {
                 "provider": provider,
-                "resolved_model": resolved_model,
+                "resolved_model": api_model,
                 "usage_model": usage_model,
                 "api_key": (
                     os.environ.get("QWEN_API_KEY", "")

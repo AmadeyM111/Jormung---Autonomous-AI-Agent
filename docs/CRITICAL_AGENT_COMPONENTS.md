@@ -517,9 +517,10 @@ Colab/Groq settings:
 GROQ_API_KEY
 TELEGRAM_BOT_TOKEN
 GITHUB_TOKEN
+OPENROUTER_API_KEY
 OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
 OUROBOROS_MODEL=openai-compatible::groq/compound
-OUROBOROS_MODEL_FALLBACK=openai-compatible::llama-3.1-8b-instant
+OUROBOROS_MODEL_FALLBACK=qwen/qwen3.6-flash
 OPENAI_COMPATIBLE_CONTEXT_LENGTH=8192
 OPENAI_COMPATIBLE_MAX_TOKENS=128
 OUROBOROS_CONTEXT_MODE=low
@@ -822,7 +823,8 @@ OUROBOROS_CONTEXT_MODE=low
 ```text
 OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
 OUROBOROS_MODEL=openai-compatible::groq/compound
-OUROBOROS_MODEL_FALLBACK=openai-compatible::llama-3.1-8b-instant
+OPENROUTER_API_KEY=<required_for_qwen_fallback>
+OUROBOROS_MODEL_FALLBACK=qwen/qwen3.6-flash
 OUROBOROS_MODEL_RESERVE=openai-compatible::<different-provider-model>
 OPENAI_COMPATIBLE_CONTEXT_LENGTH=8192
 OPENAI_COMPATIBLE_MAX_TOKENS=128

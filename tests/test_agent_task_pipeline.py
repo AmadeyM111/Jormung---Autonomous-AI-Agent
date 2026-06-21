@@ -86,14 +86,25 @@ def test_task_summary_accepts_bare_direct_groq_model(monkeypatch):
     )
 
 
-def test_task_summary_accepts_bare_direct_qwen_model(monkeypatch):
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+def test_task_summary_accepts_bare_openrouter_qwen_model(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter-key")
+    monkeypatch.delenv("QWEN_API_KEY", raising=False)
     monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "qwen/qwen3.6-flash")
 
     assert (
-        pipeline._resolve_task_summary_model("google/gemini-3.5-flash")
+        pipeline._resolve_task_summary_model("anthropic::claude-sonnet-4-6")
         == "qwen/qwen3.6-flash"
+    )
+
+
+def test_task_summary_accepts_explicit_direct_qwen_model(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "qwen::qwen3.6-flash")
+
+    assert (
+        pipeline._resolve_task_summary_model("google/gemini-3.5-flash")
+        == "qwen::qwen3.6-flash"
     )
 
 

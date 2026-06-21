@@ -308,7 +308,8 @@ Colab/Groq профиль:
 ```text
 OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
 OUROBOROS_MODEL=openai-compatible::groq/compound
-OUROBOROS_MODEL_FALLBACK=openai-compatible::llama-3.1-8b-instant
+OPENROUTER_API_KEY=<required_for_qwen_fallback>
+OUROBOROS_MODEL_FALLBACK=qwen/qwen3.6-flash
 OPENAI_COMPATIBLE_CONTEXT_LENGTH=8192
 OPENAI_COMPATIBLE_MAX_TOKENS=128
 OUROBOROS_CONTEXT_MODE=low
@@ -415,7 +416,8 @@ OUROBOROS_CONTEXT_MODE=low
 ```text
 OPENAI_COMPATIBLE_BASE_URL=https://api.groq.com/openai/v1
 OUROBOROS_MODEL=openai-compatible::groq/compound
-OUROBOROS_MODEL_FALLBACK=openai-compatible::llama-3.1-8b-instant
+OPENROUTER_API_KEY=<required_for_qwen_fallback>
+OUROBOROS_MODEL_FALLBACK=qwen/qwen3.6-flash
 OUROBOROS_MODEL_RESERVE=openai-compatible::<model_on_other_provider_or_quota>
 OPENAI_COMPATIBLE_CONTEXT_LENGTH=8192
 OPENAI_COMPATIBLE_MAX_TOKENS=128

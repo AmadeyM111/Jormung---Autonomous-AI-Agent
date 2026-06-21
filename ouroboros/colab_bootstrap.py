@@ -23,7 +23,7 @@ DEFAULT_COLAB_REPO_DIR = "/content/ouroboros_repo"
 DEFAULT_OFFICIAL_REPO_URL = "https://github.com/razzant/ouroboros.git"
 GROQ_OPENAI_COMPATIBLE_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_GROQ_OSS_MODEL = "groq/compound"
-DEFAULT_GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
+DEFAULT_OPENROUTER_QWEN_FALLBACK_MODEL = "qwen/qwen3.6-flash"
 DEFAULT_GROQ_CONTEXT_LENGTH = "8192"
 DEFAULT_GROQ_MAX_TOKENS = "128"
 
@@ -199,8 +199,18 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
     qualified_model = f"openai-compatible::{model}"
     fallback_model = _strip_openai_compatible_prefix(
         str(secrets.get("GROQ_FALLBACK_MODEL") or "").strip()
-    ) or DEFAULT_GROQ_FALLBACK_MODEL
-    qualified_fallback_model = f"openai-compatible::{fallback_model}"
+    )
+    openrouter_key = str(secrets.get("OPENROUTER_API_KEY") or "").strip()
+    if fallback_model:
+        qualified_fallback_model = (
+            fallback_model
+            if "::" in fallback_model or "/" in fallback_model
+            else f"openai-compatible::{fallback_model}"
+        )
+    elif openrouter_key:
+        qualified_fallback_model = DEFAULT_OPENROUTER_QWEN_FALLBACK_MODEL
+    else:
+        qualified_fallback_model = ""
 
     settings["OPENAI_COMPATIBLE_API_KEY"] = groq_key
     settings["OPENAI_COMPATIBLE_BASE_URL"] = GROQ_OPENAI_COMPATIBLE_BASE_URL
@@ -216,7 +226,7 @@ def _apply_groq_oss_profile(settings: Dict[str, Any], secrets: Dict[str, str]) -
     for key in _GROQ_MODEL_KEYS:
         settings[key] = qualified_model
     settings["OUROBOROS_MODEL_FALLBACK"] = (
-        qualified_fallback_model if qualified_fallback_model != qualified_model else qualified_model
+        qualified_fallback_model if qualified_fallback_model != qualified_model else ""
     )
     if not str(settings.get("OUROBOROS_MODEL_CONSCIOUSNESS") or "").strip():
         settings["OUROBOROS_MODEL_CONSCIOUSNESS"] = qualified_model

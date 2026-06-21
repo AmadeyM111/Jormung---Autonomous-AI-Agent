@@ -64,8 +64,6 @@ def _resolve_task_summary_model(default_model: str) -> str:
         if provider == "openrouter":
             if name.startswith("groq/"):
                 provider = "groq"
-            elif name.startswith("qwen/"):
-                provider = "qwen"
         if provider == "openai-compatible":
             compat = str(os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or "").strip()
             legacy_key = str(os.environ.get("OPENAI_API_KEY", "") or "").strip()

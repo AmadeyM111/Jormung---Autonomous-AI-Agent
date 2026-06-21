@@ -215,9 +215,9 @@ def infer_api_key_type(model: str, provider: Optional[str] = None) -> str:
         return "gigachat"
     if normalized.startswith("groq/"):
         return "groq"
-    if normalized.startswith("qwen/"):
-        return "qwen"
     if normalized.startswith(("anthropic/", "google/", "openai/", "x-ai/")):
+        return "openrouter"
+    if normalized.startswith("qwen/"):
         return "openrouter"
     if "claude" in normalized.lower():
         return "anthropic"
@@ -234,7 +234,7 @@ def infer_provider_from_model(model: str) -> str:
       cloudru::*            → "cloudru"
       gigachat::*           → "gigachat"
       groq::* / groq/*      → "groq"
-      qwen::* / qwen/*      → "qwen"
+      qwen::*               → "qwen"
       anything else         → "openrouter"  (un-prefixed OpenRouter routing)
 
     Used by review-pipeline emitters to ensure /api/cost-breakdown attribution
@@ -255,7 +255,7 @@ def infer_provider_from_model(model: str) -> str:
         return "gigachat"
     if raw.startswith("groq::") or raw.startswith("groq/"):
         return "groq"
-    if raw.startswith("qwen::") or raw.startswith("qwen/"):
+    if raw.startswith("qwen::"):
         return "qwen"
     return "openrouter"
 

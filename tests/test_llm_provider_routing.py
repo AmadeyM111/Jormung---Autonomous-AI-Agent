@@ -826,19 +826,29 @@ def test_resolve_bare_groq_target_uses_direct_groq_credentials(monkeypatch):
     assert target["usage_model"] == "groq/compound"
 
 
-def test_resolve_bare_qwen_target_uses_direct_qwen_credentials(monkeypatch):
+def test_resolve_explicit_qwen_target_uses_direct_qwen_credentials(monkeypatch):
     monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
     monkeypatch.delenv("QWEN_BASE_URL", raising=False)
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
 
-    target = LLMClient()._resolve_remote_target("qwen/qwen3.6-flash")
+    target = LLMClient()._resolve_remote_target("qwen::qwen3.6-plus")
 
     assert target["provider"] == "qwen"
-    assert target["resolved_model"] == "qwen/qwen3.6-flash"
+    assert target["resolved_model"] == "qwen3.6-plus"
     assert target["api_key"] == "qwen-key"
     assert target["base_url"] == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    assert target["usage_model"] == "qwen/qwen3.6-flash"
+    assert target["usage_model"] == "qwen/qwen3.6-plus"
+
+
+def test_bare_qwen_target_stays_on_openrouter(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+
+    target = LLMClient()._resolve_remote_target("qwen/qwen3.6-flash")
+
+    assert target["provider"] == "openrouter"
+    assert target["resolved_model"] == "qwen/qwen3.6-flash"
+    assert target["api_key"] == "openrouter-key"
 
 
 def test_groq_direct_provider_caps_default_max_tokens(monkeypatch):
