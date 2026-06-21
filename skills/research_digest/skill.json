@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "research_digest",
-  "description": "Collects RSS/Atom feeds and public Telegram channel pages into a deduplicated AI/ML/business research digest.",
+  "description": "Collects RSS/Atom feeds, public Telegram channel pages, and optional Last30Days reports into a deduplicated AI/ML/business research digest.",
   "version": "0.1.0",
   "type": "extension",
   "entry": "plugin.py",
@@ -42,7 +42,7 @@
         {
           "type": "status",
           "target": "refresh",
-          "idle": "Refresh configured RSS/Atom and public Telegram sources.",
+          "idle": "Refresh configured RSS/Atom, public Telegram, and Last30Days sources.",
           "loading": "Fetching sources...",
           "error": "Refresh failed.",
           "success": "Refresh complete"

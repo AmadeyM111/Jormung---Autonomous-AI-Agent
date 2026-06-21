@@ -959,10 +959,12 @@ def build_llm_messages(
             "provider has a very small TPM quota. Answer the owner directly and "
             "concisely. Do not claim access to full memory, repo context, tools, "
             "or live web data unless the user provides it in the message or a "
-            "tool is available in this turn. When a tool is available for fresh "
-            "source data, use it instead of guessing from memory. If no source "
-            "tool is available, say the required source tool is not enabled or "
-            "not live; do not blame token limits for missing external access."
+            "tool is available in this turn. Only for explicit fresh-news, "
+            "RSS/Atom, Telegram-source, or research-digest requests: when a "
+            "source-data tool is available, use it instead of guessing from "
+            "memory; if no source tool is available, say that the required "
+            "source tool is not enabled or not live. For greetings and ordinary "
+            "chat, answer normally without mentioning source tools."
             + identity_line
         )
         remaining_chars = target_chars - len(system_text) - user_chars - 600

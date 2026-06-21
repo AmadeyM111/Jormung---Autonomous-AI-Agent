@@ -170,6 +170,25 @@ def test_minimal_context_answers_capabilities_question_directly(monkeypatch):
     assert "ext_" not in answer
 
 
+def test_minimal_context_answers_simple_greeting_directly(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+
+    answer = loop_mod._maybe_answer_greeting_direct(
+        [{"role": "user", "content": "[Message from my human]: привет"}],
+    )
+
+    assert answer == "Привет. Я на связи."
+    assert "source tool" not in answer.lower()
+    assert "дайджест" not in answer.lower()
+
+
+def test_simple_greeting_detector_does_not_swallow_digest_request():
+    assert loop_mod._looks_like_simple_greeting("[Message from my human]: привет")
+    assert not loop_mod._looks_like_simple_greeting(
+        "[Message from my human]: привет, подготовь дайджест"
+    )
+
+
 def test_reserve_model_alias_is_env_only_not_setting_key():
     from ouroboros.config import SETTINGS_DEFAULTS
 

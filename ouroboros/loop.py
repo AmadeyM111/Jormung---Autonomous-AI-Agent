@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import pathlib
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -142,6 +143,25 @@ def _looks_like_capabilities_question(text: str) -> bool:
     )
 
 
+def _looks_like_simple_greeting(text: str) -> bool:
+    low = str(text or "").lower()
+    if "[message from my human]:" in low:
+        low = low.split("[message from my human]:", 1)[1]
+    normalized = re.sub(r"[^\w\sа-яё-]+", " ", low, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized in {
+        "привет",
+        "здравствуй",
+        "здравствуйте",
+        "добрый день",
+        "доброе утро",
+        "добрый вечер",
+        "hello",
+        "hi",
+        "hey",
+    }
+
+
 def _mentions_internal_tool_name(text: str) -> bool:
     return "ext_" in str(text or "").lower()
 
@@ -202,6 +222,14 @@ def _maybe_answer_capabilities_question_direct(messages: List[Dict[str, Any]]) -
         "Для дайджеста напиши: `подготовь дайджест`.\n"
         "Для разработки опиши цель или ошибку и ожидаемый результат."
     )
+
+
+def _maybe_answer_greeting_direct(messages: List[Dict[str, Any]]) -> str:
+    if not minimal_context_enabled():
+        return ""
+    if not _looks_like_simple_greeting(_latest_user_text(messages)):
+        return ""
+    return "Привет. Я на связи."
 
 
 def _research_digest_prepare_tool_name(tool_schemas: Optional[List[Dict[str, Any]]]) -> str:
@@ -1219,6 +1247,9 @@ def run_llm_loop(
     tools._ctx.event_queue = event_queue
     tools._ctx.task_id = task_id
     tools._ctx.messages = messages
+    direct_greeting_answer = _maybe_answer_greeting_direct(messages)
+    if direct_greeting_answer:
+        return _handle_text_response(direct_greeting_answer, llm_trace, accumulated_usage)
     direct_model_answer = _maybe_answer_model_question_direct(messages, active_model)
     if direct_model_answer:
         return _handle_text_response(direct_model_answer, llm_trace, accumulated_usage)

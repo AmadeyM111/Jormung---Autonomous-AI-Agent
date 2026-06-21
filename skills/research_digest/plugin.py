@@ -8,8 +8,11 @@ import hashlib
 import html
 import ipaddress
 import json
+import os
 import pathlib
 import re
+import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +33,7 @@ except ModuleNotFoundError:  # pragma: no cover - lets offline parsers import th
 
 _TIMEOUT_SEC = 15
 _MAX_RESPONSE_BYTES = 3 * 1024 * 1024
+_MAX_LAST30DAYS_OUTPUT_BYTES = 2 * 1024 * 1024
 _USER_AGENT = "Ouroboros-ResearchDigest/0.1"
 _CONFIG_FILE = "config.json"
 _RECORDS_FILE = "records.json"
@@ -309,6 +313,126 @@ def _parse_telegram_public(raw: str, source: Dict[str, Any], fetched_at: str) ->
     return out
 
 
+def _strip_ansi(value: Any) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", str(value or ""))
+
+
+def _first_markdown_or_raw_url(text: str) -> str:
+    md = re.search(r"\[[^\]]+\]\((https?://[^)\s]+)\)", text)
+    if md:
+        return md.group(1).strip()
+    raw = re.search(r"https?://[^\s)>\]]+", text)
+    return raw.group(0).strip().rstrip(".,;") if raw else ""
+
+
+def _last30days_summary(raw: str) -> str:
+    text = _strip_ansi(raw)
+    text = re.sub(r"(?s)<!--.*?-->", " ", text)
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [line for line in lines if line]
+    if lines and lines[0].lower().startswith("last30days "):
+        lines = lines[1:]
+    joined = "\n".join(lines)
+    joined = re.split(r"(?im)^key patterns from the research:\s*$", joined, maxsplit=1)[0]
+    joined = re.split(r"(?m)^---\s*$", joined, maxsplit=1)[0]
+    joined = re.sub(r"(?im)^what i learned:\s*", "", joined).strip()
+    joined = re.sub(r"\s+", " ", joined).strip()
+    return joined[:1200]
+
+
+def _parse_last30days_output(raw: str, source: Dict[str, Any], fetched_at: str) -> List[Dict[str, Any]]:
+    summary = _last30days_summary(raw)
+    if not summary:
+        return []
+    topic = str(source.get("topic") or source.get("query") or "").strip()
+    title = str(source.get("title") or "").strip()
+    if not title:
+        title = f"Last30Days: {topic}" if topic else "Last30Days report"
+    link = str(source.get("url") or "").strip() or _first_markdown_or_raw_url(raw)
+    item = _make_item(source, title, link, summary, fetched_at, fetched_at)
+    item["kind"] = "last30days"
+    return [item]
+
+
+def _last30days_engine_candidates(source: Dict[str, Any]) -> List[pathlib.Path]:
+    candidates: List[pathlib.Path] = []
+    for raw in (
+        source.get("engine_path"),
+        os.environ.get("LAST30DAYS_ENGINE_PATH"),
+    ):
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(pathlib.Path(text).expanduser())
+    for raw in (
+        source.get("skill_dir"),
+        os.environ.get("LAST30DAYS_SKILL_DIR"),
+    ):
+        text = str(raw or "").strip()
+        if text:
+            candidates.append(pathlib.Path(text).expanduser() / "scripts" / "last30days.py")
+    home = pathlib.Path.home()
+    candidates.extend([
+        home / ".codex" / "skills" / "last30days" / "scripts" / "last30days.py",
+        home / ".agents" / "skills" / "last30days" / "scripts" / "last30days.py",
+        home / ".openclaw" / "skills" / "last30days" / "scripts" / "last30days.py",
+    ])
+    candidates.extend(home.glob(".claude/plugins/cache/last30days-skill/last30days/*/skills/last30days/scripts/last30days.py"))
+    candidates.extend(home.glob(".claude/plugins/cache/last30days-skill/last30days/*/scripts/last30days.py"))
+    out: List[pathlib.Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+    return out
+
+
+def _resolve_last30days_engine(source: Dict[str, Any]) -> pathlib.Path:
+    for candidate in _last30days_engine_candidates(source):
+        if candidate.name != "last30days.py":
+            continue
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        "last30days engine not found; set LAST30DAYS_SKILL_DIR, LAST30DAYS_ENGINE_PATH, "
+        "or source skill_dir/engine_path"
+    )
+
+
+def _collect_last30days(source: Dict[str, Any], fetched_at: str, state_dir: pathlib.Path) -> List[Dict[str, Any]]:
+    topic = str(source.get("topic") or source.get("query") or "").strip()
+    if not topic:
+        raise ValueError("last30days source requires topic")
+    engine = _resolve_last30days_engine(source)
+    try:
+        timeout_sec = int(source.get("timeout_sec") or 180)
+    except (TypeError, ValueError):
+        timeout_sec = 180
+    timeout_sec = max(10, min(timeout_sec, 600))
+    env = dict(os.environ)
+    env.setdefault("LAST30DAYS_MEMORY_DIR", str(state_dir / "last30days"))
+    cmd = [sys.executable, str(engine), topic, "--emit=compact"]
+    completed = subprocess.run(
+        cmd,
+        cwd=str(engine.parent.parent if engine.parent.name == "scripts" else engine.parent),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=timeout_sec,
+        check=False,
+    )
+    stdout = str(completed.stdout or "")
+    stderr = str(completed.stderr or "")
+    if len(stdout.encode("utf-8", errors="replace")) > _MAX_LAST30DAYS_OUTPUT_BYTES:
+        raise ValueError("last30days output is too large")
+    if completed.returncode != 0:
+        detail = (stderr or stdout or f"exit {completed.returncode}").strip()
+        raise RuntimeError(f"last30days failed: {detail[:500]}")
+    return _parse_last30days_output(stdout, source, fetched_at)
+
+
 def _make_item(source: Dict[str, Any], title: str, link: str, summary: str, published: str, fetched_at: str) -> Dict[str, Any]:
     source_id = str(source.get("id") or source.get("title") or source.get("url") or "source").strip()
     return {
@@ -352,9 +476,13 @@ def _score_item(item: Dict[str, Any], topics: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
-def _collect_source(source: Dict[str, Any], topics: Dict[str, Any], limit: int) -> Dict[str, Any]:
+def _collect_source(source: Dict[str, Any], topics: Dict[str, Any], limit: int, state_dir: pathlib.Path | None = None) -> Dict[str, Any]:
     fetched_at = _utc_now()
     kind = str(source.get("kind") or "rss").strip().lower()
+    if kind == "last30days":
+        parsed = _collect_last30days(source, fetched_at, state_dir or pathlib.Path.cwd())
+        items = [_score_item(item, topics) for item in parsed]
+        return {"source_id": source.get("id"), "items": items[: max(1, min(limit, 100))], "fetched_at": fetched_at}
     url = str(source.get("url") or "").strip()
     if kind == "telegram_public" and not url:
         channel = str(source.get("channel") or "").strip().lstrip("@")
@@ -454,7 +582,7 @@ def _refresh(
     for source in sources:
         sid = str(source.get("id") or source.get("url") or "source")
         try:
-            result = _collect_source(source, topics, int(limit_per_source or 20))
+            result = _collect_source(source, topics, int(limit_per_source or 20), state_dir)
         except Exception as exc:
             errors.append({"source_id": sid, "error": f"{type(exc).__name__}: {exc}"})
             continue
@@ -694,14 +822,23 @@ def _upsert_source(state_dir: pathlib.Path, payload: Dict[str, Any]) -> Dict[str
         _save_config(state_dir, config)
         return {"ok": True, "removed": source_id, "sources": config["sources"]}
     kind = str(payload.get("kind") or "rss").strip().lower()
-    if kind not in {"rss", "atom", "telegram_public"}:
-        return {"ok": False, "error": "kind must be rss, atom, or telegram_public"}
+    if kind not in {"rss", "atom", "telegram_public", "last30days"}:
+        return {"ok": False, "error": "kind must be rss, atom, telegram_public, or last30days"}
     source = {
         "id": source_id,
         "kind": kind,
         "title": str(payload.get("title") or source_id).strip(),
     }
-    if kind == "telegram_public":
+    if kind == "last30days":
+        topic = str(payload.get("topic") or payload.get("query") or "").strip()
+        if not topic:
+            return {"ok": False, "error": "last30days source requires topic"}
+        source["topic"] = topic
+        for key in ("engine_path", "skill_dir", "timeout_sec"):
+            value = payload.get(key)
+            if value not in ("", None):
+                source[key] = str(value).strip()
+    elif kind == "telegram_public":
         channel = str(payload.get("channel") or "").strip().lstrip("@")
         url = str(payload.get("url") or "").strip()
         if not channel and not url:
@@ -773,10 +910,26 @@ def _tool_source_upsert(
     url: str = "",
     title: str = "",
     channel: str = "",
+    topic: str = "",
+    engine_path: str = "",
+    skill_dir: str = "",
     action: str = "upsert",
 ) -> str:
     return json.dumps(
-        _upsert_source(state_dir, {"id": id, "kind": kind, "url": url, "title": title, "channel": channel, "action": action}),
+        _upsert_source(
+            state_dir,
+            {
+                "id": id,
+                "kind": kind,
+                "url": url,
+                "title": title,
+                "channel": channel,
+                "topic": topic,
+                "engine_path": engine_path,
+                "skill_dir": skill_dir,
+                "action": action,
+            },
+        ),
         ensure_ascii=False,
         indent=2,
     )
@@ -821,7 +974,7 @@ def register(api: Any) -> None:
             source_id=str(source_id or ""),
         ),
         description=(
-            "Fetch configured RSS/Atom and public Telegram sources, deduplicate them, and update the "
+            "Fetch configured RSS/Atom, public Telegram, and optional Last30Days sources, deduplicate them, and update the "
             "research digest store. Do not use this for a user-facing Telegram digest request; use "
             "prepare_digest instead."
         ),
@@ -891,13 +1044,16 @@ def register(api: Any) -> None:
     )
     api.register_tool(
         "source_upsert",
-        lambda id="", kind="rss", url="", title="", channel="", action="upsert": _tool_source_upsert(
+        lambda id="", kind="rss", url="", title="", channel="", topic="", engine_path="", skill_dir="", action="upsert": _tool_source_upsert(
             state_dir=state_dir,
             id=str(id or ""),
             kind=str(kind or "rss"),
             url=str(url or ""),
             title=str(title or ""),
             channel=str(channel or ""),
+            topic=str(topic or ""),
+            engine_path=str(engine_path or ""),
+            skill_dir=str(skill_dir or ""),
             action=str(action or "upsert"),
         ),
         description="Add, update, or remove a research digest source. Use kind=telegram_public with channel for public Telegram pages.",
@@ -905,10 +1061,13 @@ def register(api: Any) -> None:
             "type": "object",
             "properties": {
                 "id": {"type": "string"},
-                "kind": {"type": "string", "enum": ["rss", "atom", "telegram_public"]},
+                "kind": {"type": "string", "enum": ["rss", "atom", "telegram_public", "last30days"]},
                 "url": {"type": "string"},
                 "title": {"type": "string"},
                 "channel": {"type": "string"},
+                "topic": {"type": "string", "description": "Topic/query for kind=last30days."},
+                "engine_path": {"type": "string", "description": "Optional path to scripts/last30days.py."},
+                "skill_dir": {"type": "string", "description": "Optional path to the last30days skill directory."},
                 "action": {"type": "string", "enum": ["upsert", "remove"]},
             },
             "required": ["id"],
@@ -937,7 +1096,7 @@ def register(api: Any) -> None:
                 {
                     "type": "status",
                     "target": "refresh",
-                    "idle": "Refresh configured RSS/Atom and public Telegram sources.",
+                    "idle": "Refresh configured RSS/Atom, public Telegram, and Last30Days sources.",
                     "loading": "Fetching sources...",
                     "error": "Refresh failed.",
                     "success": "Refresh complete",
@@ -964,6 +1123,7 @@ __all__ = [
     "register",
     "_parse_rss_atom",
     "_parse_telegram_public",
+    "_parse_last30days_output",
     "_digest_items",
     "_prepare_digest",
     "_refresh",

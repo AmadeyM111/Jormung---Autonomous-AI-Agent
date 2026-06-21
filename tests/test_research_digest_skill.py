@@ -176,6 +176,59 @@ def test_research_digest_markdown_cleans_arxiv_summary_noise(tmp_path):
     assert "Why it matters: Agent benchmarks are growing fast" in digest["markdown"]
 
 
+def test_research_digest_parses_last30days_compact_output():
+    raw = """last30days v3.8.0 · synced 2026-06-21
+
+What I learned:
+**AI agents moved from demos to production.** Teams are discussing evals, tool use, and workflow reliability across [HN](https://news.ycombinator.com/item?id=1).
+
+KEY PATTERNS from the research:
+1. Production ML agents
+
+---
+✅ All agents reported back!
+"""
+    source = {"id": "l30_ai", "kind": "last30days", "topic": "AI agents", "title": "Last30Days AI"}
+
+    items = plugin._parse_last30days_output(raw, source, "2026-06-21T10:00:00Z")
+    scored = plugin._score_item(items[0], plugin._DEFAULT_CONFIG["topics"])
+
+    assert len(items) == 1
+    assert scored["kind"] == "last30days"
+    assert scored["source_title"] == "Last30Days AI"
+    assert scored["url"] == "https://news.ycombinator.com/item?id=1"
+    assert "AI agents moved from demos" in scored["summary"]
+    assert scored["score"] > 0
+
+
+def test_research_digest_collects_last30days_source_with_local_engine(tmp_path):
+    engine = tmp_path / "last30days" / "scripts" / "last30days.py"
+    engine.parent.mkdir(parents=True)
+    engine.write_text(
+        "import sys\n"
+        "print('last30days v3.8.0 · synced 2026-06-21')\n"
+        "print('')\n"
+        "print('What I learned:')\n"
+        "print('AI agents and production ML workflows are the discussion this month.')\n",
+        encoding="utf-8",
+    )
+    source = {
+        "id": "l30_ai",
+        "kind": "last30days",
+        "topic": "AI agents",
+        "title": "Last30Days AI",
+        "engine_path": str(engine),
+        "timeout_sec": 10,
+    }
+
+    result = plugin._collect_source(source, plugin._DEFAULT_CONFIG["topics"], 5, pathlib.Path(tmp_path))
+
+    assert result["source_id"] == "l30_ai"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["kind"] == "last30days"
+    assert result["items"][0]["score"] > 0
+
+
 def test_direct_final_response_is_extension_only():
     from ouroboros.loop_tool_execution import _direct_final_response_from_tool
 

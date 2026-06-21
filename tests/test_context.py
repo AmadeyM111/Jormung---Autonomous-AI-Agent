@@ -6,7 +6,8 @@ import json
 import pathlib
 import tempfile
 
-from ouroboros.context import build_health_invariants, build_runtime_section, build_user_content
+from ouroboros.context import build_health_invariants, build_llm_messages, build_runtime_section, build_user_content
+from ouroboros.memory import Memory
 
 
 def test_force_plan_metadata_adds_structured_notice_without_rewriting_user_text():
@@ -20,6 +21,43 @@ def test_force_plan_metadata_adds_structured_notice_without_rewriting_user_text(
     assert content.startswith("[CONSILIUM_FORCE_PLAN]")
     assert "Source: consilium." in content
     assert content.rstrip().endswith("Fix the marketplace retry flow.")
+
+
+def test_minimal_context_scopes_source_tool_warning_to_source_requests(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+
+    class FakeEnv:
+        def drive_path(self, p):
+            return tmp_path / p
+
+        def repo_path(self, p):
+            return tmp_path / "repo" / p
+
+        @property
+        def repo_dir(self):
+            return tmp_path / "repo"
+
+        @property
+        def drive_root(self):
+            return tmp_path
+
+    (tmp_path / "repo" / "prompts").mkdir(parents=True)
+    (tmp_path / "state").mkdir(parents=True)
+    (tmp_path / "memory").mkdir(parents=True)
+    (tmp_path / "repo" / "prompts" / "SYSTEM.md").write_text("System", encoding="utf-8")
+    (tmp_path / "repo" / "BIBLE.md").write_text("Bible", encoding="utf-8")
+    (tmp_path / "state" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "memory" / "identity.md").write_text("I am Ouroboros", encoding="utf-8")
+
+    messages, _ = build_llm_messages(
+        env=FakeEnv(),
+        memory=Memory(drive_root=tmp_path),
+        task={"id": "task-a", "type": "task", "text": "привет"},
+    )
+
+    system_text = messages[0]["content"]
+    assert "Only for explicit fresh-news" in system_text
+    assert "For greetings and ordinary chat, answer normally" in system_text
 
 
 class TestCacheHitRateInvariant:

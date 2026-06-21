@@ -65,6 +65,33 @@ user_files
 | Skills | `list_skills`, `skill_exec`, `toggle_skill`, `skill_preflight`, `submit_skill_to_hub` |
 | Discovery | `list_available_tools`, `enable_tools`, dynamic `ext_*`, dynamic `mcp_*` |
 
+## Dynamic Extension: Research Digest
+
+`skills/research_digest` регистрирует dynamic `ext_*` tools:
+
+```text
+refresh
+prepare_digest
+digest
+sources
+source_upsert
+```
+
+Source kinds:
+
+```text
+rss
+atom
+telegram_public
+last30days
+```
+
+`last30days` - опциональный адаптер для локально установленного
+`mvanhorn/last30days-skill`: источник задает `topic` и, при необходимости,
+`skill_dir` или `engine_path` до `scripts/last30days.py`. Refresh запускает
+engine без shell с `--emit=compact`, парсит отчет в digest item и смешивает его
+с RSS/Telegram источниками.
+
 ## Текущие Базовые Tools
 
 Список получен из `ToolEntry(...)` объявлений в `ouroboros/tools/*.py`.
@@ -177,4 +204,3 @@ skills, MCP settings, grants и review state.
 - Секреты нельзя возвращать в tool result, logs или observability без redaction.
 - `claude_code_edit` остается high-capability coding tool и требует корректных
   `cwd`, resource root и `outputs` для создаваемых deliverables.
-
