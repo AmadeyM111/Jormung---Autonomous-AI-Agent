@@ -1247,8 +1247,7 @@ def run_llm_loop(
     tools._ctx.event_queue = event_queue
     tools._ctx.task_id = task_id
     tools._ctx.messages = messages
-    direct_greeting_answer = _maybe_answer_greeting_direct(messages)
-    if direct_greeting_answer:
+    if direct_greeting_answer := _maybe_answer_greeting_direct(messages):
         return _handle_text_response(direct_greeting_answer, llm_trace, accumulated_usage)
     direct_model_answer = _maybe_answer_model_question_direct(messages, active_model)
     if direct_model_answer:
