@@ -385,6 +385,9 @@ _REMOTE_PROVIDER_KEYS = (
     "CLOUDRU_FOUNDATION_MODELS_API_KEY",
     "GIGACHAT_CREDENTIALS",
     "GIGACHAT_PASSWORD",
+    "GROQ_API_KEY",
+    "QWEN_API_KEY",
+    "DASHSCOPE_API_KEY",
 )
 
 _LOCAL_ROUTING_KEYS = (
@@ -403,6 +406,8 @@ _PROVIDER_KEY_ENV = {
     "openai-compatible": "OPENAI_COMPATIBLE_API_KEY",
     "cloudru": "CLOUDRU_FOUNDATION_MODELS_API_KEY",
     "gigachat": "GIGACHAT_CREDENTIALS",
+    "groq": "GROQ_API_KEY",
+    "qwen": "QWEN_API_KEY",
 }
 
 
@@ -435,6 +440,8 @@ def _light_model_has_reachable_provider(light_model: str) -> bool:
     if env_key is None:
         return True
     if not str(os.environ.get(env_key, "") or "").strip():
+        if key_type == "qwen" and str(os.environ.get("DASHSCOPE_API_KEY", "") or "").strip():
+            return True
         return False
     if key_type == "openai-compatible":
         base_url = (

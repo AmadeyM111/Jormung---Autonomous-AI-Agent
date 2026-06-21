@@ -813,6 +813,73 @@ def test_resolve_openai_compatible_target_prefers_dedicated_credentials(monkeypa
     assert target["usage_model"] == "openai-compatible/meta-llama/compatible"
 
 
+def test_resolve_bare_groq_target_uses_direct_groq_credentials(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "groq-key")
+    monkeypatch.delenv("GROQ_BASE_URL", raising=False)
+
+    target = LLMClient()._resolve_remote_target("groq/compound")
+
+    assert target["provider"] == "groq"
+    assert target["resolved_model"] == "groq/compound"
+    assert target["api_key"] == "groq-key"
+    assert target["base_url"] == "https://api.groq.com/openai/v1"
+    assert target["usage_model"] == "groq/compound"
+
+
+def test_resolve_bare_qwen_target_uses_direct_qwen_credentials(monkeypatch):
+    monkeypatch.setenv("QWEN_API_KEY", "qwen-key")
+    monkeypatch.delenv("QWEN_BASE_URL", raising=False)
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.delenv("DASHSCOPE_BASE_URL", raising=False)
+
+    target = LLMClient()._resolve_remote_target("qwen/qwen3.6-flash")
+
+    assert target["provider"] == "qwen"
+    assert target["resolved_model"] == "qwen/qwen3.6-flash"
+    assert target["api_key"] == "qwen-key"
+    assert target["base_url"] == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    assert target["usage_model"] == "qwen/qwen3.6-flash"
+
+
+def test_groq_direct_provider_caps_default_max_tokens(monkeypatch):
+    monkeypatch.delenv("GROQ_MAX_TOKENS", raising=False)
+
+    client = LLMClient()
+    target = client._resolve_remote_target("groq/compound")
+    kwargs = client._build_remote_kwargs(
+        target,
+        [{"role": "user", "content": "hi"}],
+        "medium",
+        4096,
+        "auto",
+        None,
+        None,
+    )
+
+    assert kwargs["max_tokens"] == 128
+
+
+def test_direct_provider_settings_apply_to_env(monkeypatch):
+    from ouroboros.config import apply_settings_to_env
+
+    for key in ("GROQ_API_KEY", "GROQ_MAX_TOKENS", "QWEN_API_KEY", "QWEN_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+
+    apply_settings_to_env(
+        {
+            "GROQ_API_KEY": "groq-key",
+            "GROQ_MAX_TOKENS": "256",
+            "QWEN_API_KEY": "qwen-key",
+            "QWEN_BASE_URL": "https://qwen.example/v1",
+        }
+    )
+
+    assert os.environ["GROQ_API_KEY"] == "groq-key"
+    assert os.environ["GROQ_MAX_TOKENS"] == "256"
+    assert os.environ["QWEN_API_KEY"] == "qwen-key"
+    assert os.environ["QWEN_BASE_URL"] == "https://qwen.example/v1"
+
+
 def test_resolve_cloudru_target_uses_default_base_url(monkeypatch):
     monkeypatch.setenv("CLOUDRU_FOUNDATION_MODELS_API_KEY", "cloudru-key")
     monkeypatch.delenv("CLOUDRU_FOUNDATION_MODELS_BASE_URL", raising=False)

@@ -175,7 +175,17 @@ def estimate_cost(model: str, prompt_tokens: int, completion_tokens: int,
 def infer_api_key_type(model: str, provider: Optional[str] = None) -> str:
     """Infer which API key is used based on model name."""
     provider_name = str(provider or "").strip().lower()
-    if provider_name in {"local", "openrouter", "openai", "anthropic", "openai-compatible", "cloudru", "gigachat"}:
+    if provider_name in {
+        "local",
+        "openrouter",
+        "openai",
+        "anthropic",
+        "openai-compatible",
+        "cloudru",
+        "gigachat",
+        "groq",
+        "qwen",
+    }:
         return provider_name
     raw_model = str(model or "").strip()
     if raw_model.endswith(" (local)"):
@@ -190,6 +200,10 @@ def infer_api_key_type(model: str, provider: Optional[str] = None) -> str:
         return "cloudru"
     if raw_model.startswith("gigachat::"):
         return "gigachat"
+    if raw_model.startswith("groq::"):
+        return "groq"
+    if raw_model.startswith("qwen::"):
+        return "qwen"
     normalized = normalize_model_identity(raw_model)
     if normalized.startswith("openai/"):
         return "openrouter"
@@ -199,7 +213,11 @@ def infer_api_key_type(model: str, provider: Optional[str] = None) -> str:
         return "cloudru"
     if normalized.startswith("gigachat/"):
         return "gigachat"
-    if normalized.startswith(("anthropic/", "google/", "openai/", "x-ai/", "qwen/")):
+    if normalized.startswith("groq/"):
+        return "groq"
+    if normalized.startswith("qwen/"):
+        return "qwen"
+    if normalized.startswith(("anthropic/", "google/", "openai/", "x-ai/")):
         return "openrouter"
     if "claude" in normalized.lower():
         return "anthropic"
@@ -215,6 +233,8 @@ def infer_provider_from_model(model: str) -> str:
       openai-compatible::*  → "openai-compatible"
       cloudru::*            → "cloudru"
       gigachat::*           → "gigachat"
+      groq::* / groq/*      → "groq"
+      qwen::* / qwen/*      → "qwen"
       anything else         → "openrouter"  (un-prefixed OpenRouter routing)
 
     Used by review-pipeline emitters to ensure /api/cost-breakdown attribution
@@ -233,6 +253,10 @@ def infer_provider_from_model(model: str) -> str:
         return "cloudru"
     if raw.startswith("gigachat::"):
         return "gigachat"
+    if raw.startswith("groq::") or raw.startswith("groq/"):
+        return "groq"
+    if raw.startswith("qwen::") or raw.startswith("qwen/"):
+        return "qwen"
     return "openrouter"
 
 

@@ -289,6 +289,9 @@ def has_remote_provider(settings: dict) -> bool:
             "OPENAI_COMPATIBLE_BASE_URL",
             "CLOUDRU_FOUNDATION_MODELS_API_KEY",
             "GIGACHAT_CREDENTIALS",
+            "GROQ_API_KEY",
+            "QWEN_API_KEY",
+            "DASHSCOPE_API_KEY",
         )
     ):
         return True

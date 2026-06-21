@@ -438,11 +438,17 @@ class LLMClient:
             ("anthropic::", "anthropic"),
             ("cloudru::", "cloudru"),
             ("gigachat::", "gigachat"),
+            ("groq::", "groq"),
+            ("qwen::", "qwen"),
             ("openai-compatible::", "openai-compatible"),
             ("openrouter::", "openrouter"),
         ):
             if model_name.startswith(prefix):
                 return provider, model_name[len(prefix):].strip()
+        if model_name.startswith("groq/"):
+            return "groq", model_name
+        if model_name.startswith("qwen/"):
+            return "qwen", model_name
         return "openrouter", model_name
 
     @staticmethod
@@ -457,6 +463,10 @@ class LLMClient:
             return f"cloudru/{resolved_model}"
         if provider == "gigachat":
             return f"gigachat/{resolved_model}"
+        if provider in {"groq", "qwen"}:
+            if resolved_model.startswith(f"{provider}/"):
+                return resolved_model
+            return f"{provider}/{resolved_model}"
         return f"openai-compatible/{resolved_model}"
 
     def _resolve_remote_target(self, model: str) -> Dict[str, Any]:
@@ -521,6 +531,40 @@ class LLMClient:
                 ).strip() or "https://gigachat.devices.sberbank.ru/api/v1",
                 "scope": (os.environ.get("GIGACHAT_SCOPE", "") or "").strip() or "GIGACHAT_API_PERS",
                 "verify_ssl_certs": verify_raw not in ("0", "false", "no", "off"),
+                "default_headers": {},
+                "supports_openrouter_extensions": False,
+                "supports_generation_cost": False,
+            }
+
+        if provider == "groq":
+            return {
+                "provider": provider,
+                "resolved_model": resolved_model,
+                "usage_model": usage_model,
+                "api_key": (os.environ.get("GROQ_API_KEY", "") or "").strip(),
+                "base_url": (
+                    os.environ.get("GROQ_BASE_URL", "") or ""
+                ).strip() or "https://api.groq.com/openai/v1",
+                "default_headers": {},
+                "supports_openrouter_extensions": False,
+                "supports_generation_cost": False,
+            }
+
+        if provider == "qwen":
+            return {
+                "provider": provider,
+                "resolved_model": resolved_model,
+                "usage_model": usage_model,
+                "api_key": (
+                    os.environ.get("QWEN_API_KEY", "")
+                    or os.environ.get("DASHSCOPE_API_KEY", "")
+                    or ""
+                ).strip(),
+                "base_url": (
+                    os.environ.get("QWEN_BASE_URL", "")
+                    or os.environ.get("DASHSCOPE_BASE_URL", "")
+                    or ""
+                ).strip() or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
                 "default_headers": {},
                 "supports_openrouter_extensions": False,
                 "supports_generation_cost": False,
@@ -1983,7 +2027,24 @@ class LLMClient:
 
     @staticmethod
     def _cap_openai_compatible_max_tokens(target: Dict[str, Any], max_tokens: int) -> int:
-        if str(target.get("provider") or "") != "openai-compatible":
+        provider = str(target.get("provider") or "")
+        if provider == "groq":
+            configured = os.environ.get("GROQ_MAX_TOKENS")
+            if configured is not None and str(configured).strip() == "0":
+                return max_tokens
+            configured_limit = _positive_int_env("GROQ_MAX_TOKENS")
+            if configured_limit is not None:
+                return min(max_tokens, configured_limit)
+            return min(max_tokens, 128)
+        if provider == "qwen":
+            configured = os.environ.get("QWEN_MAX_TOKENS")
+            if configured is not None and str(configured).strip() == "0":
+                return max_tokens
+            configured_limit = _positive_int_env("QWEN_MAX_TOKENS")
+            if configured_limit is not None:
+                return min(max_tokens, configured_limit)
+            return max_tokens
+        if provider != "openai-compatible":
             return max_tokens
         configured = os.environ.get("OPENAI_COMPATIBLE_MAX_TOKENS")
         if configured is not None and str(configured).strip() == "0":
@@ -1997,7 +2058,12 @@ class LLMClient:
 
     @staticmethod
     def _openai_compatible_context_length(target: Dict[str, Any]) -> int:
-        if str(target.get("provider") or "") != "openai-compatible":
+        provider = str(target.get("provider") or "")
+        if provider == "groq":
+            return _positive_int_env("GROQ_CONTEXT_LENGTH") or 8192
+        if provider == "qwen":
+            return _positive_int_env("QWEN_CONTEXT_LENGTH") or 0
+        if provider != "openai-compatible":
             return 0
         configured = _positive_int_env("OPENAI_COMPATIBLE_CONTEXT_LENGTH")
         if configured is not None:

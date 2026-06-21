@@ -39,6 +39,8 @@ def _resolve_task_summary_model(default_model: str) -> str:
         "anthropic::": "anthropic",
         "cloudru::": "cloudru",
         "gigachat::": "gigachat",
+        "groq::": "groq",
+        "qwen::": "qwen",
         "openai-compatible::": "openai-compatible",
         "openrouter::": "openrouter",
     }
@@ -47,6 +49,8 @@ def _resolve_task_summary_model(default_model: str) -> str:
         "anthropic": ["ANTHROPIC_API_KEY"],
         "cloudru": ["CLOUDRU_FOUNDATION_MODELS_API_KEY"],
         "gigachat": ["GIGACHAT_CREDENTIALS"],
+        "groq": ["GROQ_API_KEY"],
+        "qwen": ["QWEN_API_KEY", "DASHSCOPE_API_KEY"],
         "openrouter": ["OPENROUTER_API_KEY"],
     }
 
@@ -57,6 +61,11 @@ def _resolve_task_summary_model(default_model: str) -> str:
             if name.startswith(prefix):
                 provider = candidate_provider
                 break
+        if provider == "openrouter":
+            if name.startswith("groq/"):
+                provider = "groq"
+            elif name.startswith("qwen/"):
+                provider = "qwen"
         if provider == "openai-compatible":
             compat = str(os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or "").strip()
             legacy_key = str(os.environ.get("OPENAI_API_KEY", "") or "").strip()

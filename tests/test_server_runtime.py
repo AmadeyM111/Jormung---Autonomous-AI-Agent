@@ -15,6 +15,8 @@ def test_has_startup_ready_provider_accepts_any_remote_key_or_local_routing():
     assert not has_startup_ready_provider({"OPENAI_COMPATIBLE_API_KEY": "compat-key"})
     assert has_startup_ready_provider({"CLOUDRU_FOUNDATION_MODELS_API_KEY": "cloudru-key"})
     assert has_startup_ready_provider({"GIGACHAT_CREDENTIALS": "giga-creds"})
+    assert has_startup_ready_provider({"GROQ_API_KEY": "groq-key"})
+    assert has_startup_ready_provider({"QWEN_API_KEY": "qwen-key"})
     assert has_startup_ready_provider({"USE_LOCAL_MAIN": True})
     assert not has_startup_ready_provider({"LOCAL_MODEL_SOURCE": "Qwen/Qwen2.5-7B-Instruct-GGUF"})
 
@@ -22,6 +24,8 @@ def test_has_startup_ready_provider_accepts_any_remote_key_or_local_routing():
 def test_has_supervisor_provider_requires_remote_credentials_or_local_routing():
     assert has_supervisor_provider({"OPENAI_API_KEY": "sk-openai"})
     assert has_supervisor_provider({"ANTHROPIC_API_KEY": "sk-ant"})
+    assert has_supervisor_provider({"GROQ_API_KEY": "groq-key"})
+    assert has_supervisor_provider({"QWEN_API_KEY": "qwen-key"})
     assert has_supervisor_provider({"USE_LOCAL_MAIN": True})
     assert has_supervisor_provider({"USE_LOCAL_FALLBACK": "True"})
     assert not has_supervisor_provider({"LOCAL_MODEL_SOURCE": "Qwen/Qwen2.5-7B-Instruct-GGUF"})

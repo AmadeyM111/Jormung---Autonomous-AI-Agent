@@ -117,13 +117,21 @@ OUROBOROS_MODEL_DEEP_SELF_REVIEW
 CLAUDE_CODE_MODEL
 ```
 
-OpenAI-compatible/Ollama/Groq:
+OpenAI-compatible/Ollama/direct Groq/Qwen:
 
 ```text
 OPENAI_COMPATIBLE_BASE_URL
 OPENAI_COMPATIBLE_API_KEY
 OPENAI_COMPATIBLE_CONTEXT_LENGTH
 OPENAI_COMPATIBLE_MAX_TOKENS
+GROQ_API_KEY
+GROQ_BASE_URL
+GROQ_CONTEXT_LENGTH
+GROQ_MAX_TOKENS
+QWEN_API_KEY
+QWEN_BASE_URL
+QWEN_CONTEXT_LENGTH
+QWEN_MAX_TOKENS
 ```
 
 Локальная модель через встроенный local runtime:
@@ -154,6 +162,8 @@ OPENAI_COMPATIBLE_CONTEXT_LENGTH
 ```text
 PARAMETER num_predict
 OPENAI_COMPATIBLE_MAX_TOKENS
+GROQ_MAX_TOKENS
+QWEN_MAX_TOKENS
 ```
 
 должны быть совместимы по максимальному размеру ответа.
@@ -426,4 +436,3 @@ OUROBOROS_EFFORT_CONSCIOUSNESS=low
 7. Проверить task result, logs и observability.
 8. Для Telegram/Colab проверить, что notebook подтянул свежую ветку и
    пересинхронизировал native skills.
-

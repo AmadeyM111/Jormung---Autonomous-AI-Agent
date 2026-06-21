@@ -75,6 +75,28 @@ def test_task_summary_accepts_openai_compatible_when_legacy_base_url_is_present(
     )
 
 
+def test_task_summary_accepts_bare_direct_groq_model(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "groq/compound")
+
+    assert (
+        pipeline._resolve_task_summary_model("google/gemini-3.5-flash")
+        == "groq/compound"
+    )
+
+
+def test_task_summary_accepts_bare_direct_qwen_model(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("QWEN_API_KEY", "test-qwen-key")
+    monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "qwen/qwen3.6-flash")
+
+    assert (
+        pipeline._resolve_task_summary_model("google/gemini-3.5-flash")
+        == "qwen/qwen3.6-flash"
+    )
+
+
 def test_emit_task_results_queues_restart_after_final_events(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "_store_task_result", lambda *args, **kwargs: None)
     memory_calls = []

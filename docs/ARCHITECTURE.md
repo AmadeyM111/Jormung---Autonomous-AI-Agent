@@ -1119,6 +1119,14 @@ Runtime floors:
 | OPENAI_BASE_URL | "" | Optional custom/legacy OpenAI-compatible runtime base URL. Keep empty for official OpenAI `web_search`. |
 | OPENAI_COMPATIBLE_API_KEY | "" | Optional. Dedicated OpenAI-compatible provider key |
 | OPENAI_COMPATIBLE_BASE_URL | "" | Optional. Dedicated OpenAI-compatible provider base URL |
+| GROQ_API_KEY | "" | Optional. Direct Groq provider key for `groq/...` or `groq::...` model values |
+| GROQ_BASE_URL | `https://api.groq.com/openai/v1` | Direct Groq OpenAI-compatible base URL |
+| GROQ_CONTEXT_LENGTH | `8192` | Prompt compaction context budget for direct Groq routes |
+| GROQ_MAX_TOKENS | `128` | Output cap for direct Groq routes; keep low for Telegram digest reliability |
+| QWEN_API_KEY | "" | Optional. Direct Qwen/DashScope provider key for `qwen/...` or `qwen::...` model values |
+| QWEN_BASE_URL | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | Direct Qwen OpenAI-compatible base URL |
+| QWEN_CONTEXT_LENGTH | "" | Optional prompt compaction context budget for direct Qwen routes |
+| QWEN_MAX_TOKENS | "" | Optional output cap for direct Qwen routes |
 | CLOUDRU_FOUNDATION_MODELS_API_KEY | "" | Optional. Cloud.ru Foundation Models provider key |
 | CLOUDRU_FOUNDATION_MODELS_BASE_URL | `https://foundation-models.api.cloud.ru/v1` | Cloud.ru provider base URL |
 | GIGACHAT_CREDENTIALS | "" | Optional. Sber GigaChat authorization key (base64 `client_id:secret`, OAuth). Enables `gigachat::...` model values via the `gigachat` library |
