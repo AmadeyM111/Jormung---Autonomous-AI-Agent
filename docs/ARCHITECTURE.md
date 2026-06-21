@@ -4,6 +4,11 @@ This file is NOT a changelog. Version history lives in README.md, git tags, and 
 
 This document is the current operational map of Ouroboros: structure, data flows, APIs, protected boundaries, and the rationale for non-obvious architectural choices. Rationale must be self-contained here; future maintainers should not need to open old commits to understand why a guard, review gate, or lifecycle exists.
 
+Companion operational references: `docs/tools.md` covers tool ABI and current
+base tools; `docs/evaluation.md` covers metrics/eval checks; `docs/runbook.md`
+covers production repair; `docs/adr/` records architectural decisions; and
+`CHANGELOG.md` carries the concise change history.
+
 ---
 
 ## 1. High-Level Architecture
