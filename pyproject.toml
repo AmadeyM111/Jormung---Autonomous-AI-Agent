@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Anton Razzhigaev"},
+    {name = "Anton Surikov"},
 ]
 keywords = ["ai-agent", "self-modifying", "autonomous", "llm", "openrouter"]
 classifiers = [

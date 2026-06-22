@@ -1,0 +1,17 @@
+services:
+  ouroboros:
+    build: .
+    container_name: ouroboros-agent
+    ports:
+      - "127.0.0.1:8765:8765"
+    env_file:
+      - .env
+    environment:
+      OUROBOROS_SERVER_HOST: 0.0.0.0
+      OUROBOROS_DATA_DIR: /ouroboros/data
+      OUROBOROS_REPO_DIR: /ouroboros
+      OUROBOROS_FILE_BROWSER_DEFAULT: /ouroboros
+    volumes:
+      - ./data:/ouroboros/data
+      - ./.knowledge:/ouroboros/.knowledge:ro
+    restart: unless-stopped
