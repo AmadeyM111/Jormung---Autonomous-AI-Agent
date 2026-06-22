@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Any, Dict, Optional
 
-from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
+from ouroboros.colab_bootstrap import ensure_research_digest_live, ensure_telegram_bridge_live
 from ouroboros.config import apply_settings_to_env, load_settings, save_settings
 
 
@@ -78,7 +78,7 @@ def launch_telegram_runtime(
     port: int = DEFAULT_PORT,
     command_mode: str = DEFAULT_COMMAND_MODE,
     timeout: float = 600.0,
-    review_retries: int = 3,
+    review_retries: int = 0,
     review_retry_delay: float = 75.0,
 ) -> int:
     """Start the web server, enable Telegram bridge, and keep the process alive."""
@@ -135,6 +135,18 @@ def launch_telegram_runtime(
             if bridge_status.get("warning"):
                 print(bridge_status["warning"], file=sys.stderr)
             return 1
+
+        digest_status = ensure_research_digest_live(
+            host="127.0.0.1",
+            port=actual_port,
+            data_dir=data_dir,
+            timeout=timeout,
+            review_retries=review_retries,
+            review_retry_delay=review_retry_delay,
+        )
+        if not digest_status.get("ok"):
+            warning = digest_status.get("error") or "research digest bootstrap failed"
+            print(f"Warning: {warning}", file=sys.stderr)
 
         print(
             f"Telegram bridge ready on {host}:{actual_port} "

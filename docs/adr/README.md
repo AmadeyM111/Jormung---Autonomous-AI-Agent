@@ -22,3 +22,4 @@ Status: proposed|accepted|superseded
 - `0002-provider-chain-and-context-budget.md` - primary/fallback/reserve и контекстный бюджет.
 - `0003-reviewed-skills-and-extensions.md` - reviewed skills, extensions, grants и companion lifecycle.
 - `0004-local-telegram-runtime-launcher.md` - локальный Telegram runtime launcher vs Colab bootstrap.
+- `0005-minimal-context-digest-routing.md` - отказ minimal-context на дайджесты и прямой route к reviewed `research_digest`.

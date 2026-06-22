@@ -706,6 +706,16 @@ def _bootstrap_review_official_telegram_bridge(
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _review_payload_executable(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    gate = payload.get("review_gate")
+    if isinstance(gate, dict) and gate.get("executable_review") is True:
+        return True
+    status = str(payload.get("status") or payload.get("review_status") or "").strip().lower()
+    return status in {"clean", "warnings"}
+
+
 def ensure_telegram_bridge_live(
     host: str = "127.0.0.1",
     port: int = 8765,
@@ -804,14 +814,16 @@ def ensure_telegram_bridge_live(
             return status
 
         rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
-        if not rerr:
+        if not rerr and _review_payload_executable(payload):
             status["steps"].append("reviewed")
             break
         if attempt < max_attempts - 1 and _retryable_review_error(rerr):
             status["steps"].append(f"review_retry:{attempt + 1}")
             sleeper(review_retry_delay)
             continue
-        if _retryable_review_error(rerr):
+        if not rerr:
+            rerr = "review did not produce an executable verdict"
+        if _retryable_review_error(rerr) or "executable verdict" in rerr:
             fallback = _bootstrap_review_official_telegram_bridge(data_dir, slug)
             if fallback.get("ok"):
                 status["steps"].append("review_bootstrap_fallback")
@@ -979,14 +991,16 @@ def ensure_research_digest_live(
             return status
 
         rerr = str((payload or {}).get("error") or "") if isinstance(payload, dict) else ""
-        if not rerr:
+        if not rerr and _review_payload_executable(payload):
             status["steps"].append("reviewed")
             break
         if attempt < max_attempts - 1 and _retryable_review_error(rerr):
             status["steps"].append(f"review_retry:{attempt + 1}")
             sleeper(review_retry_delay)
             continue
-        if _retryable_review_error(rerr):
+        if not rerr:
+            rerr = "review did not produce an executable verdict"
+        if _retryable_review_error(rerr) or "executable verdict" in rerr:
             fallback = _bootstrap_review_bundled_research_digest(data_dir, slug)
             if fallback.get("ok"):
                 status["steps"].append("review_bootstrap_fallback")

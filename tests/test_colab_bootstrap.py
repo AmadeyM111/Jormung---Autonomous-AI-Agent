@@ -370,6 +370,8 @@ def test_ensure_telegram_bridge_live_installs_enables_and_sets_full_access():
             return 200, {"ok": True}
         if path.endswith("/toggle"):
             return 200, {"ok": True, "enabled": True}
+        if path.endswith("/review"):
+            return 200, {"ok": True, "status": "clean"}
         return 200, {"ok": True}
     status = ensure_telegram_bridge_live(settings={"TELEGRAM_BOT_TOKEN": "x"}, request=fake_request, timeout=5)
     assert status["ok"] is True and status["command_mode_ok"] is True
@@ -394,6 +396,8 @@ def test_ensure_research_digest_live_reviews_and_enables():
             return 200, {"ok": True}
         if path.endswith("/toggle"):
             return 200, {"ok": True, "enabled": True}
+        if path.endswith("/review"):
+            return 200, {"ok": True, "status": "clean"}
         return 200, {"ok": True}
 
     status = ensure_research_digest_live(request=fake_request, timeout=5)
@@ -405,6 +409,36 @@ def test_ensure_research_digest_live_reviews_and_enables():
     assert ("POST", "/api/skills/research_digest/toggle", {"enabled": True}) in triples
     review_timeout = next(t for (m, p, b, t) in calls if p == "/api/skills/research_digest/review")
     assert review_timeout is not None and review_timeout >= 600
+
+
+def test_ensure_research_digest_live_bootstraps_pending_review(monkeypatch):
+    import ouroboros.colab_bootstrap as bootstrap
+
+    calls = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        calls.append((method, path, body, timeout))
+        if path == "/api/health":
+            return 200, {"ok": True}
+        if path.endswith("/review"):
+            return 200, {"status": "pending", "findings": []}
+        if path.endswith("/toggle"):
+            return 200, {"ok": True, "enabled": True}
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(
+        bootstrap,
+        "_bootstrap_review_bundled_research_digest",
+        lambda data_dir, slug: {"ok": True, "review_profile": "bundled_native_research_digest"},
+    )
+
+    status = bootstrap.ensure_research_digest_live(request=fake_request, timeout=5, data_dir="/tmp/data")
+
+    assert status["ok"] is True
+    assert status["steps"] == ["ready", "review_bootstrap_fallback", "enabled"]
+    triples = [(m, p, b) for (m, p, b, _t) in calls]
+    assert ("POST", "/api/skills/research_digest/toggle", {"enabled": True}) in triples
+
 
 def test_bootstrap_review_bundled_research_digest_writes_clean_review(tmp_path, monkeypatch):
     import ouroboros.colab_bootstrap as bootstrap

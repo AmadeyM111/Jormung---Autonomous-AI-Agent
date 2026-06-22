@@ -229,7 +229,8 @@ def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeyp
         monkeypatch.setattr(extension_loader, "is_extension_live", old_is_live)
 
     names = [schema["function"]["name"] for schema in schemas or []]
-    assert names == ["ext_research_refresh"]
+    assert {"read_file", "list_files", "write_file", "edit_text", "search_code", "ext_research_refresh"} <= set(names)
+    assert "ext_other_refresh" not in names
 
 
 def test_minimal_context_runs_research_digest_direct_route(monkeypatch):

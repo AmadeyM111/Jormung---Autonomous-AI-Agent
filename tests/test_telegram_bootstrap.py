@@ -54,6 +54,7 @@ def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_pa
     monkeypatch.setattr(bootstrap, "_wait_for_port_file", lambda *a, **k: 8765)
 
     captured = {}
+    captured_digest = {}
 
     def fake_ensure(*, host, port, settings, data_dir, command_mode, timeout, review_retries, review_retry_delay):
         captured.update(
@@ -71,6 +72,21 @@ def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_pa
         return {"ok": True}
 
     monkeypatch.setattr(bootstrap, "ensure_telegram_bridge_live", fake_ensure)
+    monkeypatch.setattr(
+        bootstrap,
+        "ensure_research_digest_live",
+        lambda *, host, port, data_dir, timeout, review_retries, review_retry_delay: captured_digest.update(
+            {
+                "host": host,
+                "port": port,
+                "data_dir": str(data_dir),
+                "timeout": timeout,
+                "review_retries": review_retries,
+                "review_retry_delay": review_retry_delay,
+            }
+        )
+        or {"ok": True},
+    )
 
     result = bootstrap.launch_telegram_runtime(timeout=5, review_retries=1, review_retry_delay=2.0)
 
@@ -81,6 +97,14 @@ def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_pa
     assert saved["allow_elevation"] is True
     assert captured["settings"]["OUROBOROS_SKILLS_REPO_PATH"] == ""
     assert captured["data_dir"] == str(pathlib.Path(settings["OUROBOROS_DATA_DIR"]))
+    assert captured_digest == {
+        "host": "127.0.0.1",
+        "port": 8765,
+        "data_dir": str(pathlib.Path(settings["OUROBOROS_DATA_DIR"])),
+        "timeout": 5,
+        "review_retries": 1,
+        "review_retry_delay": 2.0,
+    }
 
 
 def test_repo_gitignore_appends_runtime_data_for_existing_file(tmp_path):

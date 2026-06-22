@@ -40,12 +40,25 @@ log = logging.getLogger(__name__)
 
 
 def _minimal_context_tool_schemas(tools_registry) -> Optional[List[Dict[str, Any]]]:
-    """Expose a tiny extension-tool allowlist in minimal provider mode."""
+    """Expose a tiny practical tool allowlist in minimal provider mode."""
     raw = str(os.environ.get("OUROBOROS_MINIMAL_CONTEXT_TOOLS") or "research_digest").strip()
     allowed_skills = {item.strip() for item in raw.split(",") if item.strip()}
-    if not allowed_skills or allowed_skills == {"none"}:
-        return None
     out: List[Dict[str, Any]] = []
+    core_raw = str(
+        os.environ.get("OUROBOROS_MINIMAL_CONTEXT_CORE_TOOLS")
+        or "read_file,list_files,write_file,edit_text,search_code"
+    ).strip()
+    core_names = {item.strip() for item in core_raw.split(",") if item.strip()}
+    if core_names != {"none"}:
+        for name in core_names:
+            try:
+                schema = tools_registry.get_schema_by_name(name)
+            except Exception:
+                schema = None
+            if schema:
+                out.append(schema)
+    if not allowed_skills or allowed_skills == {"none"}:
+        return out or None
     try:
         from ouroboros.extension_loader import (
             _lock as _ext_lock,
