@@ -405,6 +405,19 @@ def _mcp_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _telegram_command(args: argparse.Namespace) -> int:
+    from ouroboros.telegram_bootstrap import launch_telegram_runtime
+
+    return launch_telegram_runtime(
+        host=args.host or "0.0.0.0",
+        port=int(args.port or 8765),
+        command_mode=str(args.command_mode or "full_access"),
+        timeout=float(args.timeout or 600.0),
+        review_retries=int(args.review_retries or 3),
+        review_retry_delay=float(args.review_retry_delay or 75.0),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ouroboros")
     parser.add_argument("--url", default="", help="Ouroboros server URL")
@@ -507,6 +520,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_marketplace_parser(subparsers)
     _add_local_model_parser(subparsers)
     _add_mcp_parser(subparsers)
+    telegram = subparsers.add_parser("telegram", help="start the server and enable the Telegram bridge")
+    telegram.add_argument("--host", default="", help="host/interface to bind for the local server")
+    telegram.add_argument("--port", type=int, default=0, help="port to bind for the local server")
+    telegram.add_argument("--command-mode", default="full_access", help="Telegram bridge command mode")
+    telegram.add_argument("--timeout", type=float, default=600.0, help="bootstrap timeout in seconds")
+    telegram.add_argument("--review-retries", type=int, default=3, help="review retry count")
+    telegram.add_argument("--review-retry-delay", type=float, default=75.0, help="delay between review retries")
+    telegram.set_defaults(func=_telegram_command)
     return parser
 
 

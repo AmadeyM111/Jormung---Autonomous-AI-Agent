@@ -1,4 +1,4 @@
-# Ouroboros — Docker image for web UI runtime
+# Ouroboros — Docker image for local runtime
 # Usage:
 #   docker build -t ouroboros-web .
 #   docker run --rm -p 8765:8765 ouroboros-web
@@ -39,4 +39,5 @@ ENV OUROBOROS_SERVER_HOST=0.0.0.0 \
 
 EXPOSE 8765
 
-ENTRYPOINT ["python", "server.py"]
+ENTRYPOINT ["python", "-m", "ouroboros.cli"]
+CMD ["server"]

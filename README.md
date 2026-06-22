@@ -269,6 +269,23 @@ docker run --rm -p 9000:9000 \
   ouroboros-web --port 9000
 ```
 
+### Docker (Telegram)
+
+For a Telegram-only local runtime, use the dedicated `telegram` launcher. It starts
+the server, enables the `telegram-bridge` skill, and sets `TELEGRAM_COMMAND_MODE=full_access`
+when the bridge is available.
+
+```bash
+docker compose up --build
+```
+
+The compose file now defaults to the Telegram launcher. To run the web UI instead,
+override the command back to `server`:
+
+```bash
+docker compose run --rm --service-ports ouroboros server
+```
+
 Required/important environment variables:
 
 | Variable | Required | Description |

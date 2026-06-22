@@ -46,6 +46,48 @@ python server.py
 python launcher.py
 ```
 
+## Docker
+
+Сначала собрать image из текущего каталога:
+```bash
+docker build -t ouroboros-web .
+
+docker run --rm -p 8765:8765 \
+  -e OUROBOROS_SERVER_HOST=0.0.0.0 \
+  ouroboros-web
+```
+
+Если нужен запуск сразу в Telegram, используй compose-режим с `telegram` launcher.
+Он поднимает `server`, ждёт `/api/health`, ставит и включает `telegram-bridge`,
+а затем выставляет `TELEGRAM_COMMAND_MODE=full_access`.
+
+```bash
+  docker compose down
+  docker compose up -d --build
+  docker compose logs -f ouroboros
+```
+
+  В этом режиме контейнер сам стартует в Telegram-launcher и должен сам поднять bridge. После этого exec уже будет работать.
+
+  Если нужен разовый запуск в foreground, используй без лишнего аргумента:
+
+```bash
+  docker compose run --rm --service-ports ouroboros
+```
+
+Для веб-режима просто переопредели команду обратно на `server`.
+
+### Проверка
+
+Посмотреть локальные images:
+```bash
+docker images | grep ouroboros
+```
+
+Если image есть, увидишь что-то вроде:
+
+ouroboros-web   latest   ...
+
 ## Provider Errors
 
 ### 400 Bad Request / tool_use failed
@@ -205,4 +247,3 @@ powershell -ExecutionPolicy Bypass -File build_windows.ps1
 - требуется safety bypass;
 - требуется снижение review/scope coverage;
 - runtime data layout меняется несовместимо.
-

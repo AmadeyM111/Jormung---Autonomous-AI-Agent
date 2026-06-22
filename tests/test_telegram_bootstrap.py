@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import pathlib
+from types import SimpleNamespace
+
+
+def test_telegram_command_invokes_launcher(monkeypatch):
+    from ouroboros import cli
+
+    seen = {}
+
+    def fake_launch_telegram_runtime(**kwargs):
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("ouroboros.telegram_bootstrap.launch_telegram_runtime", fake_launch_telegram_runtime)
+
+    result = cli._telegram_command(
+        SimpleNamespace(
+            host="127.0.0.1",
+            port=9000,
+            command_mode="full_access",
+            timeout=12.5,
+            review_retries=2,
+            review_retry_delay=1.0,
+        )
+    )
+
+    assert result == 0
+    assert seen == {
+        "host": "127.0.0.1",
+        "port": 9000,
+        "command_mode": "full_access",
+        "timeout": 12.5,
+        "review_retries": 2,
+        "review_retry_delay": 1.0,
+    }
+
+
+def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_path):
+    import ouroboros.telegram_bootstrap as bootstrap
+
+    settings = {
+        "OUROBOROS_DATA_DIR": str(tmp_path / "data"),
+        "OUROBOROS_REPO_DIR": str(tmp_path / "repo"),
+        "OUROBOROS_SKILLS_REPO_PATH": str(tmp_path / "external"),
+    }
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token-123")
+    monkeypatch.setattr(bootstrap, "load_settings", lambda: dict(settings))
+    monkeypatch.setattr(bootstrap, "apply_settings_to_env", lambda _settings: None)
+    saved = {}
+    monkeypatch.setattr(bootstrap, "save_settings", lambda payload, allow_elevation=False: saved.update({"payload": dict(payload), "allow_elevation": allow_elevation}))
+    monkeypatch.setattr(bootstrap, "_start_server", lambda *a, **k: SimpleNamespace(poll=lambda: 0, wait=lambda timeout=None: 0))
+    monkeypatch.setattr(bootstrap, "_wait_for_port_file", lambda *a, **k: 8765)
+
+    captured = {}
+
+    def fake_ensure(*, host, port, settings, data_dir, command_mode, timeout, review_retries, review_retry_delay):
+        captured.update(
+            {
+                "host": host,
+                "port": port,
+                "settings": dict(settings),
+                "data_dir": str(data_dir),
+                "command_mode": command_mode,
+                "timeout": timeout,
+                "review_retries": review_retries,
+                "review_retry_delay": review_retry_delay,
+            }
+        )
+        return {"ok": True}
+
+    monkeypatch.setattr(bootstrap, "ensure_telegram_bridge_live", fake_ensure)
+
+    result = bootstrap.launch_telegram_runtime(timeout=5, review_retries=1, review_retry_delay=2.0)
+
+    assert result == 0
+    assert captured["port"] == 8765
+    assert saved["payload"]["TELEGRAM_BOT_TOKEN"] == "token-123"
+    assert saved["payload"]["OUROBOROS_SKILLS_REPO_PATH"] == ""
+    assert saved["allow_elevation"] is True
+    assert captured["settings"]["OUROBOROS_SKILLS_REPO_PATH"] == ""
+    assert captured["data_dir"] == str(pathlib.Path(settings["OUROBOROS_DATA_DIR"]))
+
+
+def test_repo_gitignore_appends_runtime_data_for_existing_file(tmp_path):
+    from supervisor import git_ops
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gitignore = repo / ".gitignore"
+    gitignore.write_text("# existing\n.env\n", encoding="utf-8")
+
+    git_ops._ensure_repo_gitignore(repo)
+
+    text = gitignore.read_text(encoding="utf-8")
+    assert ".env" in text
+    assert "/data/" in text

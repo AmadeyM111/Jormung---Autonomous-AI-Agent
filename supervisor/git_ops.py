@@ -316,6 +316,10 @@ Thumbs.db
 repo.bundle
 repo_bundle_manifest.json
 python-standalone/
+
+# Runtime data/state. In Docker this is commonly a mounted volume and may be
+# mutated by extension loaders while the supervisor bootstraps git.
+/data/
 """
 
 
@@ -325,6 +329,19 @@ def _ensure_repo_gitignore(repo_dir: pathlib.Path = None) -> None:
     gi = target / ".gitignore"
     if not gi.exists():
         gi.write_text(_REPO_GITIGNORE, encoding="utf-8")
+        return
+
+    text = gi.read_text(encoding="utf-8")
+    required_lines = [
+        "# Runtime data/state. In Docker this is commonly a mounted volume.",
+        "/data/",
+    ]
+    if all(line in text.splitlines() for line in required_lines):
+        return
+    if text and not text.endswith("\n"):
+        text += "\n"
+    text += "\n" + "\n".join(line for line in required_lines if line not in text.splitlines()) + "\n"
+    gi.write_text(text, encoding="utf-8")
 
 
 def _ensure_git_identity() -> None:
