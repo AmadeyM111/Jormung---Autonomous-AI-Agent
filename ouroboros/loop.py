@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 
 def _minimal_context_tool_schemas(tools_registry) -> Optional[List[Dict[str, Any]]]:
     """Expose a tiny practical tool allowlist in minimal provider mode."""
-    raw = str(os.environ.get("OUROBOROS_MINIMAL_CONTEXT_TOOLS") or "research_digest").strip()
+    raw = str(os.environ.get("OUROBOROS_MINIMAL_CONTEXT_TOOLS") or "research_digest,duckduckgo").strip()
     allowed_skills = {item.strip() for item in raw.split(",") if item.strip()}
     out: List[Dict[str, Any]] = []
     core_raw = str(

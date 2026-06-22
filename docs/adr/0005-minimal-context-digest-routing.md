@@ -44,7 +44,7 @@ The bug has four distinct causes:
 - Expose a tiny practical minimal-context tool allowlist:
   `read_file`, `list_files`, `write_file`, `edit_text`, `search_code`, plus live
   reviewed extension tools from `OUROBOROS_MINIMAL_CONTEXT_TOOLS`
-  (`research_digest` by default).
+  (`research_digest,duckduckgo` by default).
 - Add a direct runtime route for explicit digest intent in minimal-context mode:
   detect the latest owner message, find the live
   `research_digest.*prepare_digest` extension tool, execute it with the standard
