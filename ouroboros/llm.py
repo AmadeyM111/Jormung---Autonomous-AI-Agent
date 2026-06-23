@@ -2031,6 +2031,17 @@ class LLMClient:
     @staticmethod
     def _cap_openai_compatible_max_tokens(target: Dict[str, Any], max_tokens: int) -> int:
         provider = str(target.get("provider") or "")
+        if provider == "openrouter":
+            configured = os.environ.get("OPENROUTER_MAX_TOKENS")
+            if configured is not None and str(configured).strip() == "0":
+                return max_tokens
+            configured_limit = _positive_int_env("OPENROUTER_MAX_TOKENS")
+            if configured_limit is not None:
+                return min(max_tokens, configured_limit)
+            compatible_limit = _positive_int_env("OPENAI_COMPATIBLE_MAX_TOKENS")
+            if compatible_limit is not None:
+                return min(max_tokens, compatible_limit)
+            return min(max_tokens, 8192)
         if provider == "groq":
             configured = os.environ.get("GROQ_MAX_TOKENS")
             if configured is not None and str(configured).strip() == "0":

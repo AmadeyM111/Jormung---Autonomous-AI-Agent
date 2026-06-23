@@ -129,6 +129,45 @@ def _looks_like_research_digest_request(text: str) -> bool:
     return any(marker in low for marker in request_markers)
 
 
+def _looks_like_web_search_request(text: str) -> bool:
+    low = str(text or "").lower()
+    if "[message from my human]:" in low:
+        low = low.split("[message from my human]:", 1)[1]
+    return bool(
+        "из поисковика" in low
+        or "поисковик" in low
+        or "поищи" in low
+        or "найди" in low
+        or "web search" in low
+        or "search the web" in low
+        or "duckduckgo" in low
+    )
+
+
+def _web_search_query_from_request(text: str) -> str:
+    query = str(text or "").strip()
+    if "[Message from my human]:" in query:
+        query = query.split("[Message from my human]:", 1)[1].strip()
+    replacements = (
+        ("пришли", ""),
+        ("отправь", ""),
+        ("дай", ""),
+        ("поищи", ""),
+        ("найди", ""),
+        ("из поисковика", ""),
+        ("в поисковике", ""),
+        ("через поисковик", ""),
+        ("duckduckgo", ""),
+        ("web search", ""),
+        ("search the web", ""),
+    )
+    low = query.lower()
+    for needle, repl in replacements:
+        low = low.replace(needle, repl)
+    low = re.sub(r"\s+", " ", low).strip(" .,:;!?")
+    return low or query[:300] or "latest news"
+
+
 def _looks_like_model_question(text: str) -> bool:
     low = str(text or "").lower()
     if "[message from my human]:" in low:
@@ -269,6 +308,30 @@ def _research_digest_prepare_tool_name(tool_schemas: Optional[List[Dict[str, Any
     return ""
 
 
+def _duckduckgo_search_tool_name(tool_schemas: Optional[List[Dict[str, Any]]]) -> str:
+    if not tool_schemas:
+        return ""
+    try:
+        from ouroboros.extension_loader import get_tool as _ext_get_tool
+    except Exception:
+        return ""
+    for schema in tool_schemas:
+        name = str(schema.get("function", {}).get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            ext_tool = _ext_get_tool(name)
+        except Exception:
+            ext_tool = None
+        if (
+            ext_tool
+            and str(ext_tool.get("skill") or "") == "duckduckgo"
+            and name.endswith("_search")
+        ):
+            return name
+    return ""
+
+
 def _maybe_run_research_digest_direct(
     *,
     messages: List[Dict[str, Any]],
@@ -317,6 +380,86 @@ def _maybe_run_research_digest_direct(
     })
     llm_trace["reasoning_notes"].append(
         "research_digest prepare_digest executed directly for a minimal-context digest request."
+    )
+    return final
+
+
+def _maybe_run_duckduckgo_direct(
+    *,
+    messages: List[Dict[str, Any]],
+    tools_registry,
+    tool_schemas: Optional[List[Dict[str, Any]]],
+    llm_trace: Dict[str, Any],
+    emit_progress: Callable[[str], None],
+) -> str:
+    """Route explicit minimal-context web-search requests through DuckDuckGo."""
+    if not minimal_context_enabled():
+        return ""
+    user_text = _latest_user_text(messages)
+    if not _looks_like_web_search_request(user_text):
+        return ""
+    tool_name = _duckduckgo_search_tool_name(tool_schemas)
+    if not tool_name:
+        return ""
+
+    args = {"query": _web_search_query_from_request(user_text), "max_results": 3}
+    emit_progress("Searching DuckDuckGo...")
+    ctx = getattr(tools_registry, "_ctx", None)
+    sentinel = object()
+    previous_trusted = getattr(ctx, "_trusted_direct_extension_tool", sentinel) if ctx is not None else sentinel
+    if ctx is not None:
+        setattr(ctx, "_trusted_direct_extension_tool", tool_name)
+    try:
+        result = tools_registry.execute(tool_name, args)
+    finally:
+        if ctx is not None:
+            if previous_trusted is sentinel:
+                try:
+                    delattr(ctx, "_trusted_direct_extension_tool")
+                except AttributeError:
+                    pass
+            else:
+                setattr(ctx, "_trusted_direct_extension_tool", previous_trusted)
+
+    final = ""
+    is_error = str(result or "").startswith("⚠️")
+    if not is_error:
+        try:
+            payload = json.loads(str(result or "{}"))
+            items = payload.get("results") if isinstance(payload, dict) else None
+            if isinstance(items, list) and items:
+                top = items[0] if isinstance(items[0], dict) else {}
+                title = str(top.get("title") or "").strip()
+                url = str(top.get("url") or "").strip()
+                snippet = str(top.get("snippet") or "").strip()
+                final = "\n".join(
+                    part
+                    for part in (
+                        f"Топ-результат по запросу: {args['query']}",
+                        f"{title}",
+                        url,
+                        f"Кратко: {snippet}" if snippet else "",
+                    )
+                    if part
+                )
+            elif isinstance(payload, dict) and payload.get("error"):
+                final = f"⚠️ DuckDuckGo search failed: {payload.get('error')}"
+                is_error = True
+        except Exception:
+            final = str(result or "").strip()
+    else:
+        final = str(result or "").strip()
+    if not final:
+        final = "Ничего не найдено через DuckDuckGo."
+    llm_trace["tool_calls"].append({
+        "tool": tool_name,
+        "args": args,
+        "result": _truncate_tool_result(result, tool_name, args),
+        "is_error": is_error,
+        "status": "direct_intent_route",
+    })
+    llm_trace["reasoning_notes"].append(
+        "duckduckgo search executed directly for a minimal-context web-search request."
     )
     return final
 
@@ -1277,6 +1420,15 @@ def run_llm_loop(
     )
     if direct_research_digest:
         return _handle_text_response(direct_research_digest, llm_trace, accumulated_usage)
+    direct_duckduckgo = _maybe_run_duckduckgo_direct(
+        messages=messages,
+        tools_registry=tools,
+        tool_schemas=tool_schemas,
+        llm_trace=llm_trace,
+        emit_progress=emit_progress,
+    )
+    if direct_duckduckgo:
+        return _handle_text_response(direct_duckduckgo, llm_trace, accumulated_usage)
     stateful_executor = StatefulToolExecutor()
     _owner_msg_seen: set = set()
     try:

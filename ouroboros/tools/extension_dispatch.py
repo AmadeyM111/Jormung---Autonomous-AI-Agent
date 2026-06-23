@@ -38,8 +38,10 @@ def dispatch_extension_tool(ctx: Any, name: str, ext_tool: Dict[str, Any], args:
     trusted_direct_call = str(getattr(ctx, "_trusted_direct_extension_tool", "") or "")
     skip_llm_safety = (
         trusted_direct_call == name
-        and skill_name == "research_digest"
-        and name.endswith("_prepare_digest")
+        and (
+            (skill_name == "research_digest" and name.endswith("_prepare_digest"))
+            or (skill_name == "duckduckgo" and name.endswith("_search"))
+        )
     )
     if skip_llm_safety:
         _ext_safety_msg = ""

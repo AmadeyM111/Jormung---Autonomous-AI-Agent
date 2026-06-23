@@ -562,6 +562,45 @@ def test_openai_compatible_tpm_error_retries_with_lower_completion_budget():
     assert [call["max_tokens"] for call in calls] == [256, 128, 64]
 
 
+def test_openrouter_default_caps_main_loop_max_tokens(monkeypatch):
+    from ouroboros.llm import LLMClient
+
+    monkeypatch.delenv("OPENROUTER_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("OPENAI_COMPATIBLE_MAX_TOKENS", raising=False)
+    client = LLMClient()
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("qwen/qwen3.6-flash"),
+        [{"role": "user", "content": "hi"}],
+        reasoning_effort="medium",
+        max_tokens=65536,
+        tool_choice="auto",
+        temperature=None,
+        tools=None,
+    )
+
+    assert kwargs["max_tokens"] == 8192
+
+
+def test_openrouter_max_tokens_env_override(monkeypatch):
+    from ouroboros.llm import LLMClient
+
+    monkeypatch.setenv("OPENROUTER_MAX_TOKENS", "4096")
+    client = LLMClient()
+
+    kwargs = client._build_remote_kwargs(
+        client._resolve_remote_target("qwen/qwen3.6-flash"),
+        [{"role": "user", "content": "hi"}],
+        reasoning_effort="medium",
+        max_tokens=65536,
+        tool_choice="auto",
+        temperature=None,
+        tools=None,
+    )
+
+    assert kwargs["max_tokens"] == 4096
+
+
 def test_openrouter_gemini_preserves_message_cache_blocks_and_strips_tool_cache(monkeypatch):
     client = LLMClient()
     monkeypatch.setattr(client, "_get_supported_parameters", lambda _model_id: None)

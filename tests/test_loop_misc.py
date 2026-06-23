@@ -300,6 +300,61 @@ def test_minimal_context_runs_research_digest_direct_route(monkeypatch):
     assert trace["tool_calls"][0]["tool"] == tool_name
 
 
+def test_minimal_context_runs_duckduckgo_direct_route(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+    tool_name = "ext_12_r_duckduckgo_search"
+    calls = []
+    progress = []
+
+    class FakeTools:
+        _ctx = SimpleNamespace(messages=[])
+
+        def execute(self, name, args):
+            calls.append((name, args))
+            return json.dumps({
+                "query": args["query"],
+                "results": [
+                    {
+                        "title": "Machine learning article",
+                        "url": "https://example.com/ml",
+                        "snippet": "A useful ML overview.",
+                    }
+                ],
+                "count": 1,
+            })
+
+    def fake_get_tool(name):
+        if name == tool_name:
+            return {"name": name, "skill": "duckduckgo"}
+        return None
+
+    monkeypatch.setattr("ouroboros.extension_loader.get_tool", fake_get_tool)
+    trace = {"reasoning_notes": [], "tool_calls": []}
+
+    result = loop_mod._maybe_run_duckduckgo_direct(
+        messages=[{"role": "user", "content": "[Message from my human]: Пришли топ статью по ML из поисковика"}],
+        tools_registry=FakeTools(),
+        tool_schemas=[{"type": "function", "function": {"name": tool_name}}],
+        llm_trace=trace,
+        emit_progress=progress.append,
+    )
+
+    assert "Machine learning article" in result
+    assert "https://example.com/ml" in result
+    assert calls[0][0] == tool_name
+    assert "ml" in calls[0][1]["query"]
+    assert progress == ["Searching DuckDuckGo..."]
+    assert trace["tool_calls"][0]["status"] == "direct_intent_route"
+
+
+def test_web_search_query_extraction_is_domain_agnostic():
+    query = loop_mod._web_search_query_from_request("Пришли топ статью по нефти из поисковика")
+
+    assert "нефти" in query
+    assert "machine learning" not in query
+    assert "из поисковика" not in query
+
+
 def test_research_digest_direct_route_requires_request_intent(monkeypatch):
     monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
 
