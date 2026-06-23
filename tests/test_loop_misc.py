@@ -162,12 +162,28 @@ def test_minimal_context_answers_capabilities_question_directly(monkeypatch):
     monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
 
     answer = loop_mod._maybe_answer_capabilities_question_direct(
-        [{"role": "user", "content": "[Message from my human]: Чем ты можешь мне помочь?"}],
+        [{"role": "user", "content": "[Message from my human]: Какие у тебя есть функции?"}],
     )
 
-    assert "готовить AI/ML дайджест" in answer
+    assert "искать информацию в интернете" in answer
+    assert "исследовательский дайджест" in answer
     assert "подготовь дайджест" in answer
     assert "ext_" not in answer
+    assert "AI/ML" not in answer
+
+
+def test_minimal_context_sanitizes_leaked_extension_tool_names(monkeypatch):
+    monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
+
+    text, _usage, trace = loop_mod._handle_text_response(
+        "Используй ext_17_r_research_digest_prepare_digest для дайджеста.",
+        {"reasoning_notes": [], "tool_calls": []},
+        {},
+    )
+
+    assert "ext_" not in text
+    assert "внутренний инструмент" in text
+    assert "ext_" not in trace["reasoning_notes"][0]
 
 
 def test_minimal_context_answers_simple_greeting_directly(monkeypatch):

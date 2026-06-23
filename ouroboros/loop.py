@@ -190,8 +190,20 @@ def _looks_like_capabilities_question(text: str) -> bool:
         or "что ты можешь" in low
         or "как ты можешь помочь" in low
         or "чем можешь помочь" in low
+        or "что умеешь" in low
+        or "какие у тебя функции" in low
+        or "какие у тебя есть функции" in low
+        or "какие есть функции" in low
+        or "какие функции" in low
+        or "твои функции" in low
+        or "какие у тебя скиллы" in low
+        or "какие у тебя есть скиллы" in low
+        or "какие скиллы" in low
+        or "твои скиллы" in low
         or "what can you do" in low
         or "how can you help" in low
+        or "your functions" in low
+        or "your skills" in low
     )
 
 
@@ -269,8 +281,9 @@ def _maybe_answer_capabilities_question_direct(messages: List[Dict[str, Any]]) -
         return ""
     return (
         "Я могу помогать с задачами по проекту и в Telegram: отвечать на вопросы, "
-        "готовить AI/ML дайджест, разбирать ошибки, читать и править код, запускать "
-        "тесты, фиксировать выводы в `.knowledge` и готовить изменения к push.\n\n"
+        "искать информацию в интернете, готовить исследовательский дайджест, "
+        "разбирать ошибки, читать и править код, запускать тесты и готовить "
+        "изменения к push.\n\n"
         "Для дайджеста напиши: `подготовь дайджест`.\n"
         "Для разработки опиши цель или ошибку и ожидаемый результат."
     )
@@ -543,9 +556,26 @@ def _handle_text_response(
     accumulated_usage: Dict[str, Any],
 ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     """Handle LLM response without tool calls (final response)."""
-    if content and content.strip():
-        llm_trace["reasoning_notes"].append(content.strip())
-    return (content or ""), accumulated_usage, llm_trace
+    safe_content = _sanitize_minimal_context_final_text(content or "")
+    if safe_content and safe_content.strip():
+        llm_trace["reasoning_notes"].append(safe_content.strip())
+    return safe_content, accumulated_usage, llm_trace
+
+
+_INTERNAL_EXTENSION_TOOL_RE = re.compile(r"\bext_[A-Za-z0-9_]+\b")
+
+
+def _sanitize_minimal_context_final_text(content: str) -> str:
+    """Keep minimal-context replies user-facing when a weak model leaks tool IDs."""
+    text = str(content or "")
+    if not text or not minimal_context_enabled():
+        return text
+    if "ext_" not in text.lower():
+        return text
+
+    sanitized = _INTERNAL_EXTENSION_TOOL_RE.sub("внутренний инструмент", text)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip() if "\n" not in sanitized else sanitized.strip()
+    return sanitized
 
 
 def _final_text_acknowledges_incomplete_children(content: Any, children: List[Dict[str, Any]]) -> bool:

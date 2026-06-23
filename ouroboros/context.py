@@ -964,7 +964,10 @@ def build_llm_messages(
             "source-data tool is available, use it instead of guessing from "
             "memory; if no source tool is available, say that the required "
             "source tool is not enabled or not live. For greetings and ordinary "
-            "chat, answer normally without mentioning source tools."
+            "chat, answer normally without mentioning source tools. Never expose "
+            "internal tool/function names such as ext_* to the owner; describe "
+            "capabilities in plain language instead. Keep answers complete; if "
+            "the answer is long, shorten it rather than ending mid-sentence."
             + identity_line
         )
         remaining_chars = target_chars - len(system_text) - user_chars - 600
