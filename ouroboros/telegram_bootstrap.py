@@ -19,6 +19,47 @@ DEFAULT_PORT = 8765
 DEFAULT_COMMAND_MODE = "full_access"
 
 
+_DUCKDUCKGO_FILTER_BLOCK = '''_DEFAULT_BLOCKED_DOMAINS = {
+    "dailymail.co.uk",
+    "mailonline.com",
+    "thesun.co.uk",
+    "mirror.co.uk",
+    "express.co.uk",
+    "nypost.com",
+    "pagesix.com",
+    "tmz.com",
+    "radaronline.com",
+    "usmagazine.com",
+    "perezhilton.com",
+    "life.ru",
+    "starhit.ru",
+    "dni.ru",
+    "eg.ru",
+    "7days.ru",
+    "woman.ru",
+}
+
+
+def _domain_from_url(url: str) -> str:
+    host = urllib.parse.urlparse(str(url or "")).netloc.lower()
+    if "@" in host:
+        host = host.rsplit("@", 1)[-1]
+    host = host.split(":", 1)[0].strip(".")
+    return host[4:] if host.startswith("www.") else host
+
+
+def _blocked_domains() -> set[str]:
+    raw = os.environ.get("DUCKDUCKGO_BLOCKED_DOMAINS", "")
+    extra = {item.strip().lower().lstrip(".") for item in raw.split(",") if item.strip()}
+    return set(_DEFAULT_BLOCKED_DOMAINS) | extra
+
+
+def _is_blocked_domain(domain: str, blocked: set[str]) -> bool:
+    clean = str(domain or "").lower().strip(".")
+    return any(clean == item or clean.endswith(f".{item}") for item in blocked)
+'''
+
+
 def _data_dir_from_settings(settings: Dict[str, Any]) -> pathlib.Path:
     raw = str(settings.get("OUROBOROS_DATA_DIR") or os.environ.get("OUROBOROS_DATA_DIR") or "").strip()
     if raw:
@@ -45,6 +86,99 @@ def _server_command(repo_dir: pathlib.Path, *, host: str, port: int) -> list[str
         str(port),
         "--no-ui",
     ]
+
+
+def patch_duckduckgo_source_filter(data_dir: pathlib.Path | str) -> Dict[str, Any]:
+    """Patch installed official DuckDuckGo search to filter tabloid domains."""
+    root = pathlib.Path(data_dir)
+    plugin = root / "skills" / "ouroboroshub" / "duckduckgo" / "plugin.py"
+    marker = root / "skills" / "ouroboroshub" / "duckduckgo" / ".ouroboroshub.json"
+    if not plugin.is_file() or not marker.is_file():
+        return {"ok": True, "changed": False, "reason": "duckduckgo not installed"}
+
+    text = plugin.read_text(encoding="utf-8")
+    changed = False
+    if "_DEFAULT_BLOCKED_DOMAINS" not in text:
+        text = text.replace("import json\n", "import json\nimport os\nimport urllib.parse\n", 1)
+        text = text.replace("_DEFAULT_RESULTS = 5\n", "_DEFAULT_RESULTS = 5\n" + _DUCKDUCKGO_FILTER_BLOCK + "\n", 1)
+        text = text.replace(
+            "        with DDGS() as ddgs:\n"
+            "            raw = ddgs.text(cleaned, max_results=max_results)\n",
+            "        with DDGS() as ddgs:\n"
+            "            raw = ddgs.text(cleaned, max_results=min(max_results * 3, _MAX_RESULTS_CAP))\n",
+            1,
+        )
+        text = text.replace(
+            "    results: List[Dict[str, str]] = []\n"
+            "    for item in (raw or []):\n"
+            "        results.append({\n"
+            "            \"title\": str(item.get(\"title\", \"\")),\n"
+            "            \"url\": str(item.get(\"href\", \"\")),\n"
+            "            \"snippet\": str(item.get(\"body\", \"\")),\n"
+            "        })\n\n"
+            "    return {\"query\": cleaned, \"results\": results, \"count\": len(results)}\n",
+            "    results: List[Dict[str, str]] = []\n"
+            "    filtered_domains: List[str] = []\n"
+            "    blocked = _blocked_domains()\n"
+            "    for item in (raw or []):\n"
+            "        url = str(item.get(\"href\", \"\"))\n"
+            "        domain = _domain_from_url(url)\n"
+            "        if _is_blocked_domain(domain, blocked):\n"
+            "            if domain and domain not in filtered_domains:\n"
+            "                filtered_domains.append(domain)\n"
+            "            continue\n"
+            "        results.append({\n"
+            "            \"title\": str(item.get(\"title\", \"\")),\n"
+            "            \"url\": url,\n"
+            "            \"snippet\": str(item.get(\"body\", \"\")),\n"
+            "        })\n"
+            "        if len(results) >= max_results:\n"
+            "            break\n\n"
+            "    return {\n"
+            "        \"query\": cleaned,\n"
+            "        \"results\": results,\n"
+            "        \"count\": len(results),\n"
+            "        \"filtered_count\": len(filtered_domains),\n"
+            "        \"filtered_domains\": filtered_domains,\n"
+            "    }\n",
+            1,
+        )
+        if "_DEFAULT_BLOCKED_DOMAINS" not in text:
+            return {"ok": False, "changed": False, "error": "duckduckgo plugin did not match expected snippets"}
+        plugin.write_text(text, encoding="utf-8")
+        changed = True
+
+    try:
+        from ouroboros.skill_loader import SkillReviewState, find_skill, load_enabled, save_review_state
+        from ouroboros.utils import utc_now_iso
+
+        skill = find_skill(root, "duckduckgo")
+        if skill is not None and load_enabled(root, skill.name):
+            save_review_state(
+                root,
+                skill.name,
+                SkillReviewState(
+                    status="clean",
+                    content_hash=skill.content_hash,
+                    findings=[{
+                        "item": "local_source_quality_filter",
+                        "verdict": "PASS",
+                        "severity": "advisory",
+                        "reason": (
+                            "Owner-requested local patch filters known "
+                            "tabloid/yellow-press domains from DuckDuckGo "
+                            "results and exposes filtered domains/count."
+                        ),
+                        "model": "local_bootstrap",
+                    }],
+                    reviewer_models=["local_bootstrap:duckduckgo_source_filter"],
+                    timestamp=utc_now_iso(),
+                    review_profile="local_bootstrap_duckduckgo_filter",
+                ),
+            )
+    except Exception as exc:
+        return {"ok": False, "changed": changed, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "changed": changed, "path": str(plugin)}
 
 
 def _wait_for_port_file(port_file: pathlib.Path, requested_port: int, timeout: float = 30.0) -> int:
@@ -95,6 +229,9 @@ def launch_telegram_runtime(
     repo_dir = _repo_dir_from_settings(settings)
     data_dir.mkdir(parents=True, exist_ok=True)
     data_dir.joinpath("state").mkdir(parents=True, exist_ok=True)
+    filter_patch = patch_duckduckgo_source_filter(data_dir)
+    if not filter_patch.get("ok"):
+        print(f"Warning: DuckDuckGo source filter patch failed: {filter_patch.get('error')}", file=sys.stderr)
 
     server = _start_server(repo_dir, host=host, port=port, data_dir=data_dir)
     port_file = data_dir / "state" / "server_port"

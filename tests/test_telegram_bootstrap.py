@@ -120,3 +120,47 @@ def test_repo_gitignore_appends_runtime_data_for_existing_file(tmp_path):
     text = gitignore.read_text(encoding="utf-8")
     assert ".env" in text
     assert "/data/" in text
+
+
+def test_duckduckgo_source_filter_patch_injects_domain_filter(tmp_path):
+    from ouroboros.telegram_bootstrap import patch_duckduckgo_source_filter
+
+    skill_dir = tmp_path / "skills" / "ouroboroshub" / "duckduckgo"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / ".ouroboroshub.json").write_text('{"source":"ouroboroshub","slug":"duckduckgo"}', encoding="utf-8")
+    (skill_dir / "SKILL.md").write_text("---\nname: duckduckgo\ntype: extension\nentry: plugin.py\n---\n", encoding="utf-8")
+    (skill_dir / "plugin.py").write_text(
+        '''import asyncio
+import json
+from typing import Any, Dict, List
+
+_MAX_RESULTS_CAP = 20
+_DEFAULT_RESULTS = 5
+
+def _search(query: str, max_results: int = _DEFAULT_RESULTS) -> Dict[str, Any]:
+    cleaned = (query or "").strip()
+    from ddgs import DDGS
+    with DDGS() as ddgs:
+        raw = ddgs.text(cleaned, max_results=max_results)
+    results: List[Dict[str, str]] = []
+    for item in (raw or []):
+        results.append({
+            "title": str(item.get("title", "")),
+            "url": str(item.get("href", "")),
+            "snippet": str(item.get("body", "")),
+        })
+
+    return {"query": cleaned, "results": results, "count": len(results)}
+''',
+        encoding="utf-8",
+    )
+
+    result = patch_duckduckgo_source_filter(tmp_path)
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    text = (skill_dir / "plugin.py").read_text(encoding="utf-8")
+    assert "urllib.parse" in text
+    assert "_DEFAULT_BLOCKED_DOMAINS" in text
+    assert "dailymail.co.uk" in text
+    assert "filtered_domains" in text
