@@ -87,7 +87,7 @@ def test_fallback_model_switch_is_trace_only_not_chat_progress(tmp_path, monkeyp
     monkeypatch.setattr(loop_mod, "call_llm_with_retry", fake_call_llm_with_retry)
 
     result, _usage, trace = run_llm_loop(
-        messages=[{"role": "user", "content": "hello"}],
+        messages=[{"role": "user", "content": "write a short status report"}],
         tools=ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path),
         llm=FakeLLM(),
         drive_logs=tmp_path,
@@ -123,7 +123,7 @@ def test_fallback_model_chain_reaches_reserve(tmp_path, monkeypatch):
     monkeypatch.setattr(loop_mod, "call_llm_with_retry", fake_call_llm_with_retry)
 
     result, _usage, trace = run_llm_loop(
-        messages=[{"role": "user", "content": "hello"}],
+        messages=[{"role": "user", "content": "write a short status report"}],
         tools=ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path),
         llm=FakeLLM(),
         drive_logs=tmp_path,
@@ -152,9 +152,11 @@ def test_minimal_context_answers_model_question_directly(monkeypatch):
         "openai-compatible::gemma4:31b-cloud",
     )
 
-    assert "openai-compatible::gemma4:31b-cloud" in answer
-    assert "openai-compatible::groq/compound" in answer
-    assert "openrouter::reserve/model" in answer
+    assert "Я Jormung" in answer
+    assert "внутренней конфигурацией runtime" in answer
+    assert "openai-compatible::gemma4:31b-cloud" not in answer
+    assert "openai-compatible::groq/compound" not in answer
+    assert "openrouter::reserve/model" not in answer
     assert "ext_" not in answer
 
 

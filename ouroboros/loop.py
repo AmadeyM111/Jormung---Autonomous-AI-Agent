@@ -226,10 +226,6 @@ def _looks_like_simple_greeting(text: str) -> bool:
     }
 
 
-def _mentions_internal_tool_name(text: str) -> bool:
-    return "ext_" in str(text or "").lower()
-
-
 def _fallback_model_candidates(active_model: str) -> List[str]:
     raw_candidates = [
         os.environ.get("OUROBOROS_MODEL_FALLBACK", ""),
@@ -258,20 +254,10 @@ def _maybe_answer_model_question_direct(messages: List[Dict[str, Any]], active_m
     user_text = _latest_user_text(messages)
     if not _looks_like_model_question(user_text):
         return ""
-    fallbacks = _fallback_model_candidates(active_model)
-    lines = [
-        "Я Jormung. Текущий основной model slot:",
-        f"`{active_model}`",
-    ]
-    if fallbacks:
-        lines.append("Fallback chain:")
-        for idx, model in enumerate(fallbacks, 1):
-            lines.append(f"{idx}. `{model}`")
-    else:
-        lines.append("Fallback chain не настроен.")
-    if _mentions_internal_tool_name(user_text):
-        lines.append("Внутренние `ext_...` имена - это tools, не модель.")
-    return "\n".join(lines)
+    return (
+        "Я Jormung. Конкретные provider/model IDs являются внутренней "
+        "конфигурацией runtime и не выводятся в обычном Telegram-чате."
+    )
 
 
 def _maybe_answer_capabilities_question_direct(messages: List[Dict[str, Any]]) -> str:
