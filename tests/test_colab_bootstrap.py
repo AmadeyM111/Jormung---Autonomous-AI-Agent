@@ -115,7 +115,7 @@ def test_quickstart_runs_groq_smoke_before_server():
     assert "blocked at the project level" in source
     assert "GROQ_FALLBACK_MODELS" in source
     assert "llama-3.1-8b-instant" not in source
-    assert "llama-3.3-70b-versatile" in source
+    assert "openai-compatible::gemma4:31b-cloud" in source
     assert "Using Groq fallback model:" in source
     assert source.index("apply_settings_to_env(settings)") < source.index("smoke = _run_groq_smoke(settings)")
     assert "smoke_env" in source
@@ -475,6 +475,82 @@ def test_bootstrap_review_bundled_research_digest_writes_clean_review(tmp_path, 
     assert loaded.review.review_profile == "bundled_native_research_digest"
     assert grants["all_granted"] is True
 
+
+def test_bootstrap_review_bundled_post_broadcast_writes_clean_review(tmp_path, monkeypatch):
+    import ouroboros.colab_bootstrap as bootstrap
+    from ouroboros.config import SETTINGS_DEFAULTS
+    from ouroboros.skill_loader import find_skill, grant_status_for_skill
+
+    settings = dict(SETTINGS_DEFAULTS)
+    settings["TELEGRAM_BOT_TOKEN"] = "token-123"
+    monkeypatch.setattr("ouroboros.config.load_settings", lambda: settings)
+    skill_dir = tmp_path / "skills" / "native" / "post_broadcast"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / ".seed-origin").write_text("seeded_from=skills\n", encoding="utf-8")
+    (skill_dir / "skill.json").write_text(
+        """{
+  "schema_version": 1,
+  "name": "post_broadcast",
+  "description": "Broadcast",
+  "version": "0.1.0",
+  "type": "extension",
+  "entry": "plugin.py",
+  "permissions": ["net", "tool", "route", "widget", "read_settings", "supervised_task"],
+  "env_from_settings": ["TELEGRAM_BOT_TOKEN"]
+}
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "plugin.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+
+    result = bootstrap._bootstrap_review_bundled_post_broadcast(tmp_path, "post_broadcast")
+    loaded = find_skill(tmp_path, "post_broadcast")
+    grants = grant_status_for_skill(tmp_path, loaded)
+
+    assert result["ok"] is True
+    assert result["review_profile"] == "bundled_native_post_broadcast"
+    assert loaded.review.status == "clean"
+    assert loaded.review.review_profile == "bundled_native_post_broadcast"
+    assert grants["requested_keys"] == ["TELEGRAM_BOT_TOKEN"]
+    assert grants["all_granted"] is True
+
+
+def test_bootstrap_review_bundled_post_broadcast_rehashes_after_seed_marker(tmp_path, monkeypatch):
+    import ouroboros.colab_bootstrap as bootstrap
+    from ouroboros.config import SETTINGS_DEFAULTS
+    from ouroboros.skill_loader import find_skill
+
+    settings = dict(SETTINGS_DEFAULTS)
+    settings["TELEGRAM_BOT_TOKEN"] = "token-123"
+    monkeypatch.setattr("ouroboros.config.load_settings", lambda: settings)
+    skill_dir = tmp_path / "skills" / "native" / "post_broadcast"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "skill.json").write_text(
+        """{
+  "schema_version": 1,
+  "name": "post_broadcast",
+  "description": "Broadcast",
+  "version": "0.1.0",
+  "type": "extension",
+  "entry": "plugin.py",
+  "permissions": ["net", "tool", "route", "widget", "read_settings", "supervised_task"],
+  "env_from_settings": ["TELEGRAM_BOT_TOKEN"]
+}
+""",
+        encoding="utf-8",
+    )
+    (skill_dir / "plugin.py").write_text("def register(api):\n    pass\n", encoding="utf-8")
+
+    result = bootstrap._bootstrap_review_bundled_post_broadcast(tmp_path, "post_broadcast")
+    loaded = find_skill(tmp_path, "post_broadcast")
+
+    assert result["ok"] is True
+    assert (skill_dir / ".seed-origin").is_file()
+    assert loaded.review.status == "clean"
+    assert loaded.review.content_hash == loaded.content_hash
+    assert loaded.review.is_stale_for(loaded.content_hash) is False
+
+
 def test_ensure_research_digest_live_bootstrap_reviews_after_quorum_failure(monkeypatch, tmp_path):
     import ouroboros.colab_bootstrap as bootstrap
     calls = []
@@ -508,6 +584,41 @@ def test_ensure_research_digest_live_bootstrap_reviews_after_quorum_failure(monk
     assert fallback_calls == [(tmp_path, "research_digest")]
     assert ("POST", "/api/skills/research_digest/toggle", {"enabled": True}) in calls
 
+
+def test_ensure_post_broadcast_live_bootstrap_reviews_after_quorum_failure(monkeypatch, tmp_path):
+    import ouroboros.colab_bootstrap as bootstrap
+    calls = []
+
+    def fake_request(method, path, body=None, timeout=None):
+        calls.append((method, path, body))
+        if path == "/api/health":
+            return 200, {}
+        if path.endswith("/review"):
+            return 200, {"error": "Skill review quorum failure: fewer than 2 reviewers returned parseable findings."}
+        if path.endswith("/toggle"):
+            return 200, {"enabled": True}
+        return 200, {}
+
+    fallback_calls = []
+
+    def fake_fallback(data_dir, slug):
+        fallback_calls.append((data_dir, slug))
+        return {"ok": True, "review_profile": "bundled_native_post_broadcast"}
+
+    monkeypatch.setattr(bootstrap, "_bootstrap_review_bundled_post_broadcast", fake_fallback)
+    status = bootstrap.ensure_post_broadcast_live(
+        data_dir=tmp_path,
+        request=fake_request,
+        timeout=5,
+        review_retries=0,
+    )
+
+    assert status["ok"] is True
+    assert status["steps"] == ["ready", "review_bootstrap_fallback", "enabled"]
+    assert fallback_calls == [(tmp_path, "post_broadcast")]
+    assert ("POST", "/api/skills/post_broadcast/toggle", {"enabled": True}) in calls
+
+
 def test_ensure_telegram_bridge_live_command_mode_failure_is_not_silent():
     from ouroboros.colab_bootstrap import ensure_telegram_bridge_live
     def fake_request(method, path, body=None, timeout=None):
@@ -517,6 +628,8 @@ def test_ensure_telegram_bridge_live_command_mode_failure_is_not_silent():
             return 200, {"enabled": True}
         if path.endswith("/settings/save"):
             return 404, {"error": "route not found"}
+        if path.endswith("/review"):
+            return 200, {"status": "clean"}
         return 200, {}
     status = ensure_telegram_bridge_live(settings={"TELEGRAM_BOT_TOKEN": "x"}, request=fake_request, timeout=5)
     # Bridge installed+enabled, but command mode not applied — must not claim it silently.
@@ -538,6 +651,7 @@ def test_ensure_telegram_bridge_live_retries_transient_review_quorum_failure():
             review_attempts += 1
             if review_attempts == 1:
                 return 200, {"error": "Skill review quorum failure: fewer than 2 reviewers returned parseable findings."}
+            return 200, {"status": "clean"}
         if path.endswith("/toggle"):
             return 200, {"enabled": True}
         return 200, {}
@@ -637,6 +751,8 @@ def test_ensure_telegram_bridge_live_handles_already_installed_and_warns_missing
             return 409, {"error": "telegram-bridge is already installed"}
         if path.endswith("/toggle"):
             return 200, {"enabled": True}
+        if path.endswith("/review"):
+            return 200, {"status": "clean"}
         return 200, {}
     status = ensure_telegram_bridge_live(request=fake_request, timeout=5)
     assert status["ok"] is True and "already_installed" in status["steps"]
@@ -652,6 +768,8 @@ def test_ensure_telegram_bridge_live_stops_on_enable_error():
     def fake_request(method, path, body=None, timeout=None):
         if path == "/api/health":
             return 200, {}
+        if path.endswith("/review"):
+            return 200, {"status": "clean"}
         if path.endswith("/toggle"):
             return 409, {"error": "cannot enable until requested key and permission grants are approved"}
         return 200, {}

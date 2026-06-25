@@ -33,6 +33,10 @@ Telegram bridge skill available, review/enable it, and switch the bridge to
   server start, bridge bootstrap, bridge enablement, and command mode setup.
 - Keep skill discovery pointing at the runtime data plane, including an optional
   `OUROBOROS_SKILLS_REPO_PATH` checkout when present.
+- For local development, let the launcher read the repo `.env` fallback so
+  `TELEGRAM_BOT_TOKEN` reaches the active settings store without a manual shell
+  export. Docker still owns `.env` through `env_file`, but the CLI launcher must
+  also make the token available when started directly from the workspace.
 
 ## Consequences
 

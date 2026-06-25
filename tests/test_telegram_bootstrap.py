@@ -55,6 +55,7 @@ def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_pa
 
     captured = {}
     captured_digest = {}
+    captured_broadcast = {}
 
     def fake_ensure(*, host, port, settings, data_dir, command_mode, timeout, review_retries, review_retry_delay):
         captured.update(
@@ -87,6 +88,21 @@ def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_pa
         )
         or {"ok": True},
     )
+    monkeypatch.setattr(
+        bootstrap,
+        "ensure_post_broadcast_live",
+        lambda *, host, port, data_dir, timeout, review_retries, review_retry_delay: captured_broadcast.update(
+            {
+                "host": host,
+                "port": port,
+                "data_dir": str(data_dir),
+                "timeout": timeout,
+                "review_retries": review_retries,
+                "review_retry_delay": review_retry_delay,
+            }
+        )
+        or {"ok": True},
+    )
 
     result = bootstrap.launch_telegram_runtime(timeout=5, review_retries=1, review_retry_delay=2.0)
 
@@ -105,6 +121,37 @@ def test_telegram_launcher_clears_persisted_skills_repo_path(monkeypatch, tmp_pa
         "review_retries": 1,
         "review_retry_delay": 2.0,
     }
+    assert captured_broadcast == captured_digest
+
+
+def test_telegram_launcher_reads_token_from_dotenv(monkeypatch, tmp_path):
+    import ouroboros.telegram_bootstrap as bootstrap
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("TELEGRAM_BOT_TOKEN=token-from-dotenv\n", encoding="utf-8")
+
+    settings = {
+        "OUROBOROS_DATA_DIR": str(tmp_path / "data"),
+        "OUROBOROS_REPO_DIR": str(tmp_path / "repo"),
+        "OUROBOROS_SKILLS_REPO_PATH": "",
+    }
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TG_BOT_TOKEN", raising=False)
+    monkeypatch.setattr(bootstrap, "load_settings", lambda: dict(settings))
+    monkeypatch.setattr(bootstrap, "apply_settings_to_env", lambda _settings: None)
+    saved = {}
+    monkeypatch.setattr(bootstrap, "save_settings", lambda payload, allow_elevation=False: saved.update({"payload": dict(payload), "allow_elevation": allow_elevation}))
+    monkeypatch.setattr(bootstrap, "_start_server", lambda *a, **k: SimpleNamespace(poll=lambda: 0, wait=lambda timeout=None: 0))
+    monkeypatch.setattr(bootstrap, "_wait_for_port_file", lambda *a, **k: 8765)
+    monkeypatch.setattr(bootstrap, "ensure_telegram_bridge_live", lambda **kwargs: {"ok": True})
+    monkeypatch.setattr(bootstrap, "ensure_research_digest_live", lambda **kwargs: {"ok": True})
+    monkeypatch.setattr(bootstrap, "ensure_post_broadcast_live", lambda **kwargs: {"ok": True})
+
+    result = bootstrap.launch_telegram_runtime(timeout=5, review_retries=0, review_retry_delay=0.1)
+
+    assert result == 0
+    assert saved["payload"]["TELEGRAM_BOT_TOKEN"] == "token-from-dotenv"
+    assert saved["allow_elevation"] is True
 
 
 def test_repo_gitignore_appends_runtime_data_for_existing_file(tmp_path):

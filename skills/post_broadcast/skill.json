@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "name": "post_broadcast",
+  "description": "Collects image-required posts from configured websites, rewrites captions through the agent workflow, and broadcasts approved posts to configured Telegram chats.",
+  "version": "0.1.0",
+  "type": "extension",
+  "entry": "plugin.py",
+  "permissions": ["net", "tool", "route", "widget", "read_settings", "supervised_task"],
+  "env_from_settings": ["TELEGRAM_BOT_TOKEN"],
+  "when_to_use": "User wants to automatically collect image posts from websites such as Pinterest boards and send one rewritten post with a required image to one or more Telegram chats on a cron schedule.",
+  "scheduled_tasks": [
+    {
+      "name": "cat_meme_post_broadcast",
+      "cron": "0 10-19/3 * * *",
+      "timezone": "Europe/Moscow",
+      "description": "Prepare and send exactly one post from post_broadcast. Call post_broadcast prepare_next with refresh=true. If it returns ok=true and has_prepared=true, rewrite the prepared source text into an intellectually funny Russian Telegram caption, keep it under 700 characters, do not invent facts, and include the provided source_url. Then call post_broadcast send_prepared with prepared_id and the rewritten caption. If no post is prepared, report the reason briefly."
+    }
+  ],
+  "ui_tab": {
+    "tab_id": "post_broadcast",
+    "title": "Post broadcast",
+    "icon": "send",
+    "render": {
+      "kind": "declarative",
+      "schema_version": 1,
+      "components": [
+        {
+          "type": "form",
+          "route": "prepare",
+          "method": "POST",
+          "target": "prepare",
+          "submit_label": "Prepare next",
+          "fields": [
+            {
+              "name": "refresh",
+              "label": "Refresh",
+              "type": "checkbox",
+              "default": "true"
+            }
+          ]
+        },
+        {
+          "type": "status",
+          "target": "prepare",
+          "idle": "Prepare one image post for broadcast.",
+          "loading": "Preparing...",
+          "error": "Prepare failed.",
+          "success": "Prepared"
+        },
+        {
+          "type": "json",
+          "target": "prepare"
+        }
+      ]
+    }
+  }
+}

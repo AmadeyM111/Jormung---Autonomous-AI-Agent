@@ -168,6 +168,10 @@ Telegram -> agent -> research_digest.prepare_digest -> compact final_response
 - использовать reserve на другом quota pool;
 - временно снизить background tasks.
 
+Для `post_broadcast` и Telegram launcher см. отдельную KB-страницу:
+
+- [Post Broadcast And Telegram Troubleshooting](./knowledge/post_broadcast-telegram-troubleshooting.md)
+
 ## Server/Gateway
 
 Симптомы:

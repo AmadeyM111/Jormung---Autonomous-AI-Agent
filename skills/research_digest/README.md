@@ -6,7 +6,9 @@ business-adoption news assistant.
 It keeps the base Ouroboros runtime untouched and adds:
 
 - RSS and Atom feed collection.
-- Public Telegram channel page collection through `https://t.me/s/<channel>`.
+- Public Telegram channel page collection through
+  Telegram public channel mirror pages
+  (for example: https://t.me/s/@data_secrets).
 - URL/title-based deduplication.
 - Topic scoring for AI, engineering, ML in production, agentic systems,
   business adoption, and research.

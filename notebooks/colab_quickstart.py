@@ -142,7 +142,7 @@ def _groq_fallback_candidates(settings: dict, secrets: dict) -> list[str]:
         str(secrets.get("GROQ_FALLBACK_MODELS") or os.environ.get("GROQ_FALLBACK_MODELS") or "")
     )
     defaults = [
-        "llama-3.3-70b-versatile",
+        "openai-compatible::gemma4:31b-cloud",
     ]
     available = _fetch_groq_model_ids(str(settings.get("OPENAI_COMPATIBLE_API_KEY") or ""))
     current = _strip_openai_compatible_prefix(str(settings.get("OUROBOROS_MODEL") or ""))

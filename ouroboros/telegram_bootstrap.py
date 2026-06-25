@@ -10,13 +10,14 @@ import sys
 import time
 from typing import Any, Dict, Optional
 
-from ouroboros.colab_bootstrap import ensure_research_digest_live, ensure_telegram_bridge_live
+from ouroboros.colab_bootstrap import ensure_post_broadcast_live, ensure_research_digest_live, ensure_telegram_bridge_live
 from ouroboros.config import apply_settings_to_env, load_settings, save_settings
 
 
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8765
 DEFAULT_COMMAND_MODE = "full_access"
+_TELEGRAM_TOKEN_KEYS = ("TELEGRAM_BOT_TOKEN", "TG_BOT_TOKEN")
 
 
 _DUCKDUCKGO_FILTER_BLOCK = '''_DEFAULT_BLOCKED_DOMAINS = {
@@ -72,6 +73,48 @@ def _repo_dir_from_settings(settings: Dict[str, Any]) -> pathlib.Path:
     if raw:
         return pathlib.Path(raw).expanduser()
     return pathlib.Path(__file__).resolve().parents[1]
+
+
+def _unquote_env_value(raw: str) -> str:
+    text = str(raw or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        return text[1:-1]
+    return text
+
+
+def _read_env_file_value(path: pathlib.Path, keys: tuple[str, ...]) -> str:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    wanted = {str(key).strip() for key in keys if str(key).strip()}
+    for line in raw.splitlines():
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        if text.startswith("export "):
+            text = text[len("export ") :].lstrip()
+        if "=" not in text:
+            continue
+        key, value = text.split("=", 1)
+        if key.strip() in wanted:
+            return _unquote_env_value(value)
+    return ""
+
+
+def _resolve_telegram_bot_token_from_local_env() -> str:
+    """Return the Telegram token from process env or a local .env file."""
+    for key in _TELEGRAM_TOKEN_KEYS:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value
+
+    candidates = [pathlib.Path.cwd() / ".env", pathlib.Path(__file__).resolve().parents[1] / ".env"]
+    for candidate in candidates:
+        value = _read_env_file_value(candidate, _TELEGRAM_TOKEN_KEYS)
+        if value:
+            return value.strip()
+    return ""
 
 
 def _server_command(repo_dir: pathlib.Path, *, host: str, port: int) -> list[str]:
@@ -216,6 +259,9 @@ def launch_telegram_runtime(
     review_retry_delay: float = 75.0,
 ) -> int:
     """Start the web server, enable Telegram bridge, and keep the process alive."""
+    env_telegram_token = _resolve_telegram_bot_token_from_local_env()
+    if env_telegram_token:
+        os.environ["TELEGRAM_BOT_TOKEN"] = env_telegram_token
     settings = load_settings()
     env_telegram_token = str(os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
     if env_telegram_token and str(settings.get("TELEGRAM_BOT_TOKEN") or "").strip() != env_telegram_token:
@@ -283,6 +329,18 @@ def launch_telegram_runtime(
         )
         if not digest_status.get("ok"):
             warning = digest_status.get("error") or "research digest bootstrap failed"
+            print(f"Warning: {warning}", file=sys.stderr)
+
+        broadcast_status = ensure_post_broadcast_live(
+            host="127.0.0.1",
+            port=actual_port,
+            data_dir=data_dir,
+            timeout=timeout,
+            review_retries=review_retries,
+            review_retry_delay=review_retry_delay,
+        )
+        if not broadcast_status.get("ok"):
+            warning = broadcast_status.get("error") or "post broadcast bootstrap failed"
             print(f"Warning: {warning}", file=sys.stderr)
 
         print(
