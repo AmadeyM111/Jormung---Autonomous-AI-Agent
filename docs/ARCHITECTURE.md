@@ -1,4 +1,4 @@
-# Ouroboros v6.18.1 — Architecture & Reference
+# Ouroboros - Yourmung v2.0.0 — Architecture & Reference
 
 This file is NOT a changelog. Version history lives in README.md, git tags, and commit log.
 

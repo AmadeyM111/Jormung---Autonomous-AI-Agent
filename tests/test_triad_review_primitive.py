@@ -91,3 +91,31 @@ def test_emit_review_model_error_events(tmp_path):
     data = (logs / "events.jsonl").read_text(encoding="utf-8")
     assert '"review_model_error"' in data
     assert '"skill": "demo"' in data
+
+def test_skill_review_partial_when_required_item_missing():
+    raw = json.dumps([
+        {"item": "a", "verdict": "PASS", "severity": "advisory", "reason": "ok"},
+    ])
+
+    parsed = parse_model_review_results(
+        {"results": [{"model": "m1", "verdicr": "REVIEW", "text": raw}]},
+        required_items=["a", "b"],
+    )
+
+    assert parsed.actor_records[0].status == "partial"
+    assert parsed.responsive_models == []
+
+
+def test_skill_review_responded_when_all_required_items_presents():
+    raw = json.dumps([
+        {"item": "a", "verdict": "PASS", "severity": "advisory", "reason": "ok"},
+        {"item": "b", "verdict": "PASS", "severity": "advisory", "reason": "ok"},
+    ])
+
+    parsed = parse_model_review_results(
+        {"results": [{"model": "m1", "verdicr": "REVIEW", "text": raw}]},
+        required_items=["a", "b"],
+    )
+
+    assert parsed.actor_records[0].status == "responded"
+    assert parsed.responsive_models == ["m1#1"]

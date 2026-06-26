@@ -32,6 +32,33 @@ def test_post_broadcast_parses_pinterest_board_html():
     assert items[0]["url"] == "https://ru.pinterest.com/pin/123456789/"
     assert items[0]["title"] == "A clever cat meme"
     assert items[0]["status"] == "new"
+    assert items[0]["image_key"] == "pinimg:aa/bb/cat.jpg"
+
+
+def test_post_broadcast_deduplicates_pinterest_image_sizes():
+    first = plugin._pinimg_image_key("https://i.pinimg.com/474x/8e/63/3e/cat.jpg")
+    second = plugin._pinimg_image_key("https://i.pinimg.com/736x/8e/63/3e/cat.jpg")
+    original = plugin._pinimg_image_key("https://i.pinimg.com/originals/8e/63/3e/cat.jpg")
+
+    assert first == second == original
+    assert plugin._fingerprint("cats", "https://i.pinimg.com/474x/8e/63/3e/cat.jpg", "", "") == plugin._fingerprint(
+        "cats",
+        "https://i.pinimg.com/originals/8e/63/3e/cat.jpg",
+        "",
+        "",
+    )
+
+
+def test_post_broadcast_candidates_skip_failed_and_prepared():
+    records = {
+        "items": [
+            {"id": "failed", "status": "failed", "image_url": "https://i.pinimg.com/736x/aa/bb/failed.jpg"},
+            {"id": "prepared", "status": "prepared", "image_url": "https://i.pinimg.com/736x/aa/bb/prepared.jpg"},
+            {"id": "new", "status": "new", "image_url": "https://i.pinimg.com/736x/aa/bb/new.jpg"},
+        ]
+    }
+
+    assert [item["id"] for item in plugin._candidate_items(records)] == ["new"]
 
 
 def test_post_broadcast_prepare_next_downloads_required_image(tmp_path, monkeypatch):
@@ -115,3 +142,127 @@ def test_post_broadcast_send_prepared_appends_source_and_marks_sent(tmp_path, mo
     records = json.loads((tmp_path / "records.json").read_text(encoding="utf-8"))
     assert records["items"][0]["status"] == "sent"
     assert json.loads((tmp_path / "prepared.json").read_text(encoding="utf-8")) == {}
+
+
+def test_post_broadcast_subscription_state_merges_configured_and_manual_ids(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps({"telegram": {"chat_ids": ["7568942324", "394721762"]}}),
+        encoding="utf-8",
+    )
+
+    subscribed = plugin._set_subscription(tmp_path, "361255098", subscribed=True)
+    unsubscribed = plugin._set_subscription(tmp_path, "394721762", subscribed=False)
+
+    assert subscribed["ok"] is True
+    assert unsubscribed["ok"] is True
+    status = plugin._subscription_status(tmp_path)
+    assert status["configured_chat_ids"] == ["7568942324", "394721762"]
+    assert status["subscribed_chat_ids"] == ["361255098"]
+    assert status["unsubscribed_chat_ids"] == ["394721762"]
+    assert status["active_chat_ids"] == ["7568942324", "361255098"]
+
+
+def test_post_broadcast_send_prepared_skips_unsubscribed_configured_chat(tmp_path, monkeypatch):
+    image_path = tmp_path / "images" / "post.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_PNG_BYTES)
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "telegram": {
+                    "chat_ids": ["7568942324", "394721762"],
+                    "append_source_link": False,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "prepared.json").write_text(
+        json.dumps({"prepared_id": "post-1", "image_path": str(image_path), "source_text": "Cat studies gravity"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "records.json").write_text(
+        json.dumps({"schema_version": 1, "items": [{"id": "post-1", "status": "prepared"}]}),
+        encoding="utf-8",
+    )
+    plugin._set_subscription(tmp_path, "394721762", subscribed=False)
+    sent_chat_ids = []
+    monkeypatch.setattr(
+        plugin,
+        "_telegram_send_photo",
+        lambda _token, chat_id, _image_path, _caption: sent_chat_ids.append(chat_id) or {"ok": True},
+    )
+
+    result = plugin._send_prepared(
+        tmp_path,
+        prepared_id="post-1",
+        caption="Intellectual cat joke",
+        telegram_token="1234567890:test_token",
+    )
+
+    assert result["ok"] is True
+    assert result["requested_chats"] == 1
+    assert sent_chat_ids == ["7568942324"]
+
+
+def test_post_broadcast_send_prepared_tolerates_stale_prepared_id(tmp_path, monkeypatch):
+    image_path = tmp_path / "images" / "post.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_PNG_BYTES)
+    (tmp_path / "config.json").write_text(
+        json.dumps({"telegram": {"chat_ids": ["7568942324"], "append_source_link": False}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prepared.json").write_text(
+        json.dumps({"prepared_id": "current", "image_path": str(image_path), "source_text": "Cat meme"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "records.json").write_text(
+        json.dumps({"schema_version": 1, "items": [{"id": "current", "status": "prepared"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(plugin, "_telegram_send_photo", lambda *_args: {"ok": True})
+
+    result = plugin._send_prepared(
+        tmp_path,
+        prepared_id="stale",
+        caption="Cat meme",
+        telegram_token="1234567890:test_token",
+    )
+
+    assert result["ok"] is True
+    assert result["warning"] == "requested prepared_id was stale; sent current prepared post"
+    assert result["requested_prepared_id"] == "stale"
+    assert result["current_prepared_id"] == "current"
+
+
+def test_post_broadcast_send_prepared_uses_informative_fallback_caption(tmp_path, monkeypatch):
+    image_path = tmp_path / "images" / "post.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_PNG_BYTES)
+    (tmp_path / "config.json").write_text(
+        json.dumps({"telegram": {"chat_ids": ["7568942324"], "append_source_link": False}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prepared.json").write_text(
+        json.dumps({"prepared_id": "current", "image_path": str(image_path), "title": "Cat memes"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "records.json").write_text(
+        json.dumps({"schema_version": 1, "items": [{"id": "current", "status": "prepared"}]}),
+        encoding="utf-8",
+    )
+    sent = []
+    monkeypatch.setattr(
+        plugin,
+        "_telegram_send_photo",
+        lambda _token, _chat_id, _image_path, caption: sent.append(caption) or {"ok": True},
+    )
+
+    result = plugin._send_prepared(tmp_path, prepared_id="current", caption="", telegram_token="1234567890:test_token")
+
+    assert result["ok"] is True
+    assert sent
+    assert sent[0] != "Cat memes"
+    assert "Кот" in sent[0]
+    assert "клавиатуре" in sent[0]

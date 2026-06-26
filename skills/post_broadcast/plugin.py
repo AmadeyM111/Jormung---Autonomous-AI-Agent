@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover - lets offline parsers import th
 _CONFIG_FILE = "config.json"
 _RECORDS_FILE = "records.json"
 _PREPARED_FILE = "prepared.json"
+_SUBSCRIPTIONS_FILE = "subscribers.json"
 _IMAGES_DIR = "images"
 _TIMEOUT_SEC = 20
 _MAX_HTML_BYTES = 4 * 1024 * 1024
@@ -65,6 +66,24 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "require_image": True,
         "skip_duplicates": True,
         "skip_broken_images": True,
+        "require_topic_match": True,
+        "topic_keywords": [
+            "cat",
+            "cats",
+            "kitten",
+            "kittens",
+            "meow",
+            "meme",
+            "memes",
+            "кот",
+            "коты",
+            "кошка",
+            "кошки",
+            "котик",
+            "котики",
+            "мем",
+            "мемы",
+        ],
         "min_image_width": 400,
         "min_image_height": 400,
     },
@@ -149,6 +168,92 @@ def _save_records(state_dir: pathlib.Path, records: Dict[str, Any]) -> None:
     _atomic_write_json(_state_path(state_dir, _RECORDS_FILE), records)
 
 
+def _normalize_chat_id(chat_id: Any) -> str:
+    return str(chat_id or "").strip()
+
+
+def _unique_chat_ids(values: Iterable[Any]) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        chat_id = _normalize_chat_id(value)
+        if not chat_id or chat_id in seen:
+            continue
+        seen.add(chat_id)
+        out.append(chat_id)
+    return out
+
+
+def _load_subscriptions(state_dir: pathlib.Path) -> Dict[str, Any]:
+    data = _read_json(
+        _state_path(state_dir, _SUBSCRIPTIONS_FILE),
+        {"schema_version": 1, "subscribed_chat_ids": [], "unsubscribed_chat_ids": []},
+    )
+    if not isinstance(data, dict):
+        data = {}
+    data["schema_version"] = 1
+    data["subscribed_chat_ids"] = _unique_chat_ids(data.get("subscribed_chat_ids") or [])
+    data["unsubscribed_chat_ids"] = _unique_chat_ids(data.get("unsubscribed_chat_ids") or [])
+    return data
+
+
+def _save_subscriptions(state_dir: pathlib.Path, subscriptions: Dict[str, Any]) -> None:
+    payload = {
+        "schema_version": 1,
+        "subscribed_chat_ids": _unique_chat_ids(subscriptions.get("subscribed_chat_ids") or []),
+        "unsubscribed_chat_ids": _unique_chat_ids(subscriptions.get("unsubscribed_chat_ids") or []),
+        "updated_at": _utc_now(),
+    }
+    _atomic_write_json(_state_path(state_dir, _SUBSCRIPTIONS_FILE), payload)
+
+
+def _configured_chat_ids(config: Dict[str, Any]) -> List[str]:
+    telegram = config.get("telegram") if isinstance(config.get("telegram"), dict) else {}
+    return _unique_chat_ids(telegram.get("chat_ids") or [])
+
+
+def _effective_chat_ids(state_dir: pathlib.Path, config: Dict[str, Any]) -> List[str]:
+    subscriptions = _load_subscriptions(state_dir)
+    configured = _configured_chat_ids(config)
+    subscribed = _unique_chat_ids(subscriptions.get("subscribed_chat_ids") or [])
+    unsubscribed = set(_unique_chat_ids(subscriptions.get("unsubscribed_chat_ids") or []))
+    return [chat_id for chat_id in _unique_chat_ids([*configured, *subscribed]) if chat_id not in unsubscribed]
+
+
+def _subscription_status(state_dir: pathlib.Path) -> Dict[str, Any]:
+    config = _load_config(state_dir)
+    subscriptions = _load_subscriptions(state_dir)
+    return {
+        "ok": True,
+        "configured_chat_ids": _configured_chat_ids(config),
+        "subscribed_chat_ids": list(subscriptions.get("subscribed_chat_ids") or []),
+        "unsubscribed_chat_ids": list(subscriptions.get("unsubscribed_chat_ids") or []),
+        "active_chat_ids": _effective_chat_ids(state_dir, config),
+    }
+
+
+def _set_subscription(state_dir: pathlib.Path, chat_id: str, *, subscribed: bool) -> Dict[str, Any]:
+    normalized = _normalize_chat_id(chat_id)
+    if not normalized:
+        return {"ok": False, "error": "chat_id is required"}
+    subscriptions = _load_subscriptions(state_dir)
+    subscribed_ids = _unique_chat_ids(subscriptions.get("subscribed_chat_ids") or [])
+    unsubscribed_ids = _unique_chat_ids(subscriptions.get("unsubscribed_chat_ids") or [])
+    if subscribed:
+        subscribed_ids = _unique_chat_ids([*subscribed_ids, normalized])
+        unsubscribed_ids = [item for item in unsubscribed_ids if item != normalized]
+    else:
+        subscribed_ids = [item for item in subscribed_ids if item != normalized]
+        unsubscribed_ids = _unique_chat_ids([*unsubscribed_ids, normalized])
+    subscriptions["subscribed_chat_ids"] = subscribed_ids
+    subscriptions["unsubscribed_chat_ids"] = unsubscribed_ids
+    _save_subscriptions(state_dir, subscriptions)
+    payload = _subscription_status(state_dir)
+    payload["chat_id"] = normalized
+    payload["subscribed"] = subscribed
+    return payload
+
+
 def _is_blocked_host(host: str) -> bool:
     clean = str(host or "").strip().strip("[]").lower()
     if not clean:
@@ -219,6 +324,49 @@ def _clean_url(url: str) -> str:
     return text
 
 
+def _pinimg_image_key(url: str) -> str:
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    host = (parsed.hostname or "").lower()
+    path = urllib.parse.unquote(parsed.path or "").strip("/")
+    if "pinimg.com" not in host or not path:
+        return str(url or "").strip().split("?", 1)[0].lower()
+    parts = [part for part in path.split("/") if part]
+    if parts and re.fullmatch(r"(?:\d+x|originals)", parts[0], flags=re.IGNORECASE):
+        parts = parts[1:]
+    return "pinimg:" + "/".join(parts).lower()
+
+
+def _text_has_topic(text: str, keywords: List[str]) -> bool:
+    haystack = urllib.parse.unquote(str(text or "")).lower()
+    return any(str(keyword or "").lower() in haystack for keyword in keywords)
+
+
+def _is_technical_noise(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return True
+    return bool(re.fullmatch(r"(?:get|build|set|create|init)[A-Z][A-Za-z0-9_]{2,}", value))
+
+
+def _matches_topic(item: Dict[str, Any], source: Dict[str, Any]) -> bool:
+    moderation = source.get("moderation") if isinstance(source.get("moderation"), dict) else {}
+    require_topic = bool(moderation.get("require_topic_match", _DEFAULT_CONFIG["moderation"]["require_topic_match"]))
+    if not require_topic:
+        return True
+    keywords = moderation.get("topic_keywords") or _DEFAULT_CONFIG["moderation"]["topic_keywords"]
+    if not isinstance(keywords, list):
+        keywords = _DEFAULT_CONFIG["moderation"]["topic_keywords"]
+    fields = [
+        item.get("title", ""),
+        item.get("text", ""),
+        item.get("url", ""),
+        source.get("title", ""),
+        source.get("url", ""),
+        source.get("id", ""),
+    ]
+    return any(_text_has_topic(str(field), keywords) for field in fields)
+
+
 def _strip_text(value: Any) -> str:
     text = html.unescape(str(value or ""))
     text = re.sub(r"(?is)<(script|style).*?</\1>", " ", text)
@@ -228,7 +376,8 @@ def _strip_text(value: Any) -> str:
 
 
 def _fingerprint(source_id: str, image_url: str, post_url: str, title: str = "") -> str:
-    key = (post_url or image_url or f"{source_id}|{title}").strip().lower()
+    image_key = _pinimg_image_key(image_url)
+    key = (image_key or post_url or image_url or f"{source_id}|{title}").strip().lower()
     return hashlib.sha256(key.encode("utf-8", errors="replace")).hexdigest()[:24]
 
 
@@ -281,8 +430,10 @@ def _parse_pinterest_board(raw: str, source: Dict[str, Any], fetched_at: str) ->
     for pos, image_url in images[: max(1, int(source.get("max_items") or 40))]:
         post_url = _nearest_match(pin_pattern, text, pos)
         title = _extract_title_near(text, pos) or source_title
+        if _is_technical_noise(title):
+            title = source_title
         item_id = _fingerprint(source_id, image_url, post_url, title)
-        out.append({
+        item = {
             "id": item_id,
             "source_id": source_id,
             "source_title": source_title,
@@ -291,10 +442,13 @@ def _parse_pinterest_board(raw: str, source: Dict[str, Any], fetched_at: str) ->
             "text": title,
             "url": post_url or str(source.get("url") or ""),
             "image_url": image_url,
+            "image_key": _pinimg_image_key(image_url),
             "published_at": "",
             "fetched_at": fetched_at,
             "status": "new",
-        })
+        }
+        if _matches_topic(item, source):
+            out.append(item)
     return out
 
 
@@ -332,7 +486,16 @@ def _refresh(state_dir: pathlib.Path, *, source_id: str = "", limit_per_source: 
             item_id = str(item.get("id") or "")
             if not item_id:
                 continue
-            if item_id in by_id:
+            image_key = str(item.get("image_key") or _pinimg_image_key(str(item.get("image_url") or "")))
+            item["image_key"] = image_key
+            duplicate_id = ""
+            for existing_id, existing_item in by_id.items():
+                if image_key and str(existing_item.get("image_key") or _pinimg_image_key(str(existing_item.get("image_url") or ""))) == image_key:
+                    duplicate_id = existing_id
+                    break
+            target_id = duplicate_id or item_id
+            if target_id in by_id:
+                item_id = target_id
                 previous_status = str(by_id[item_id].get("status") or "new")
                 by_id[item_id].update({k: v for k, v in item.items() if v not in ("", None, {}, [])})
                 by_id[item_id]["status"] = previous_status
@@ -405,13 +568,20 @@ def _download_image(state_dir: pathlib.Path, item: Dict[str, Any], moderation: D
 
 
 def _candidate_items(records: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    seen_image_keys: set[str] = set()
     for item in records.get("items", []):
         if not isinstance(item, dict):
             continue
-        if str(item.get("status") or "new") in {"sent", "skipped"}:
+        if str(item.get("status") or "new") not in {"new"}:
             continue
         if not str(item.get("image_url") or ""):
             continue
+        image_key = str(item.get("image_key") or _pinimg_image_key(str(item.get("image_url") or "")))
+        if image_key in seen_image_keys:
+            item["status"] = "skipped"
+            item["last_error"] = "duplicate image variant"
+            continue
+        seen_image_keys.add(image_key)
         yield item
 
 
@@ -446,7 +616,7 @@ def _prepare_next(state_dir: pathlib.Path, *, refresh: bool = True) -> Dict[str,
             "image_path": str(item.get("image_path") or ""),
             "rewrite_style": config.get("rewrite", {}),
             "telegram": {
-                "chat_ids": list((config.get("telegram") or {}).get("chat_ids") or []),
+                "chat_ids": _effective_chat_ids(state_dir, config),
                 "append_source_link": bool((config.get("telegram") or {}).get("append_source_link", True)),
             },
         }
@@ -464,6 +634,21 @@ def _clamp_caption(caption: str, source_url: str, append_source_link: bool) -> s
     if len(text) > _TELEGRAM_PHOTO_CAPTION_LIMIT:
         text = text[: _TELEGRAM_PHOTO_CAPTION_LIMIT - 1].rstrip() + "..."
     return text
+
+
+def _fallback_caption(prepared: Dict[str, Any]) -> str:
+    title = str(prepared.get("title") or prepared.get("source_text") or "").strip()
+    if title and title.lower() not in {"cat memes", "cats", "memes"}:
+        return (
+            f"{title}\n\n"
+            "Кот в кадре демонстрирует уверенность старшего инженера: лапа уже на клавиатуре, "
+            "мышь под контролем, задача почти решена. Осталось понять, кто открыл 47 вкладок."
+        )
+    return (
+        "Кот занял рабочее место и выглядит так, будто сейчас закроет спринт, "
+        "перепишет документацию и случайно отправит отчёт всем в чате. "
+        "Настоящий мем про продуктивность: главное — держать лапу на клавиатуре и делать вид, что всё под контролем."
+    )
 
 
 def _telegram_send_photo(token: str, chat_id: str, image_path: pathlib.Path, caption: str) -> Dict[str, Any]:
@@ -515,22 +700,23 @@ def _send_prepared(
 ) -> Dict[str, Any]:
     config = _load_config(state_dir)
     telegram = config.get("telegram") if isinstance(config.get("telegram"), dict) else {}
-    chat_ids = [str(chat).strip() for chat in telegram.get("chat_ids", []) if str(chat).strip()]
+    chat_ids = _effective_chat_ids(state_dir, config)
     if not chat_ids:
-        return {"ok": False, "error": "telegram.chat_ids is empty"}
+        return {"ok": False, "error": "no active Telegram broadcast subscribers"}
     token = str(telegram_token or "").strip()
     if not token:
         return {"ok": False, "error": "TELEGRAM_BOT_TOKEN is not configured"}
     prepared = _read_json(_state_path(state_dir, _PREPARED_FILE), {})
     if not isinstance(prepared, dict) or not prepared.get("prepared_id"):
         return {"ok": False, "error": "no prepared post"}
-    if prepared_id and prepared_id != str(prepared.get("prepared_id") or ""):
-        return {"ok": False, "error": "prepared_id does not match current prepared post"}
+    requested_prepared_id = str(prepared_id or "").strip()
+    current_prepared_id = str(prepared.get("prepared_id") or "")
+    stale_prepared_id = bool(requested_prepared_id and requested_prepared_id != current_prepared_id)
     image_path = pathlib.Path(str(prepared.get("image_path") or ""))
     if not image_path.is_file():
         return {"ok": False, "error": f"prepared image is missing: {image_path}"}
     final_caption = _clamp_caption(
-        caption or str(prepared.get("source_text") or prepared.get("title") or ""),
+        caption or _fallback_caption(prepared),
         str(prepared.get("source_url") or ""),
         bool(telegram.get("append_source_link", True)),
     )
@@ -555,7 +741,12 @@ def _send_prepared(
     _save_records(state_dir, records)
     if ok_count == len(chat_ids):
         _atomic_write_json(_state_path(state_dir, _PREPARED_FILE), {})
-    return {"ok": ok_count == len(chat_ids), "sent_chats": ok_count, "requested_chats": len(chat_ids), "results": results}
+    payload = {"ok": ok_count == len(chat_ids), "sent_chats": ok_count, "requested_chats": len(chat_ids), "results": results}
+    if stale_prepared_id:
+        payload["warning"] = "requested prepared_id was stale; sent current prepared post"
+        payload["requested_prepared_id"] = requested_prepared_id
+        payload["current_prepared_id"] = current_prepared_id
+    return payload
 
 
 def _list_status(state_dir: pathlib.Path) -> Dict[str, Any]:
@@ -570,6 +761,7 @@ def _list_status(state_dir: pathlib.Path) -> Dict[str, Any]:
         "counts": counts,
         "prepared": _read_json(_state_path(state_dir, _PREPARED_FILE), {}),
         "config": _load_config(state_dir),
+        "subscriptions": _subscription_status(state_dir),
     }
 
 
@@ -618,6 +810,18 @@ def register(api: Any) -> None:
     async def route_status(request: Request) -> JSONResponse:
         return JSONResponse(_list_status(state_dir))
 
+    async def route_subscribe(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        chat_id = body.get("chat_id") or request.query_params.get("chat_id")
+        payload = _set_subscription(state_dir, str(chat_id or ""), subscribed=True)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
+
+    async def route_unsubscribe(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        chat_id = body.get("chat_id") or request.query_params.get("chat_id")
+        payload = _set_subscription(state_dir, str(chat_id or ""), subscribed=False)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
+
     api.register_tool(
         "refresh",
         lambda limit_per_source=40, source_id="": json.dumps(
@@ -646,7 +850,8 @@ def register(api: Any) -> None:
         ),
         description=(
             "Prepare one unsent image-required post for LLM caption rewrite. Use this first in the scheduled "
-            "post_broadcast workflow; then call send_prepared with the rewritten caption."
+            "post_broadcast workflow; then call send_prepared with an original Russian caption that describes "
+            "the visible image, is informative, lightly funny, and not just the source title."
         ),
         schema={"type": "object", "properties": {"refresh": {"type": "boolean"}}},
         timeout_sec=120,
@@ -662,7 +867,11 @@ def register(api: Any) -> None:
             ),
             ensure_ascii=False,
         ),
-        description="Send the currently prepared image post to configured Telegram chats using TELEGRAM_BOT_TOKEN.",
+        description=(
+            "Send the currently prepared image post to configured Telegram chats using TELEGRAM_BOT_TOKEN. "
+            "Pass a non-empty Russian caption that describes the visible image; do not send generic titles "
+            "such as 'Cat memes'."
+        ),
         schema={
             "type": "object",
             "properties": {
@@ -673,6 +882,39 @@ def register(api: Any) -> None:
         timeout_sec=60,
     )
     api.register_tool(
+        "subscribe",
+        lambda chat_id="": json.dumps(
+            _set_subscription(state_dir, str(chat_id or ""), subscribed=True),
+            ensure_ascii=False,
+        ),
+        description=(
+            "Subscribe a Telegram chat_id to post_broadcast. The chat_id is stored only in the skill state "
+            "directory and will be included in future broadcasts unless it unsubscribes."
+        ),
+        schema={"type": "object", "properties": {"chat_id": {"type": "string"}}},
+        timeout_sec=10,
+    )
+    api.register_tool(
+        "unsubscribe",
+        lambda chat_id="": json.dumps(
+            _set_subscription(state_dir, str(chat_id or ""), subscribed=False),
+            ensure_ascii=False,
+        ),
+        description=(
+            "Opt a Telegram chat_id out of post_broadcast. This suppresses delivery even if the chat_id is "
+            "still present in the configured telegram.chat_ids list."
+        ),
+        schema={"type": "object", "properties": {"chat_id": {"type": "string"}}},
+        timeout_sec=10,
+    )
+    api.register_tool(
+        "list_subscribers",
+        lambda: json.dumps(_subscription_status(state_dir), ensure_ascii=False),
+        description="Return configured, subscribed, unsubscribed, and active post_broadcast Telegram chat_ids.",
+        schema={"type": "object", "properties": {}},
+        timeout_sec=10,
+    )
+    api.register_tool(
         "status",
         lambda: json.dumps(_list_status(state_dir), ensure_ascii=False),
         description="Return post_broadcast config, prepared item, and record status counts.",
@@ -681,6 +923,8 @@ def register(api: Any) -> None:
     )
     api.register_route("prepare", route_prepare, methods=("POST", "GET"))
     api.register_route("status", route_status, methods=("GET",))
+    api.register_route("subscribe", route_subscribe, methods=("POST", "GET"))
+    api.register_route("unsubscribe", route_unsubscribe, methods=("POST", "GET"))
     api.register_ui_tab(
         "post_broadcast",
         "Post broadcast",
