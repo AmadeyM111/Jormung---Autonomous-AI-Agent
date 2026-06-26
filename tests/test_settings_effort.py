@@ -100,7 +100,7 @@ def test_get_review_models_default(monkeypatch):
     models = get_review_models()
     assert isinstance(models, list)
     assert len(models) >= 2
-    assert all("/" in m for m in models)  # valid OpenRouter model IDs
+    assert all(("/" in m or "::" in m) for m in models)  # valid routed model IDs
 
 
 def test_get_review_models_custom(monkeypatch):
@@ -135,10 +135,10 @@ def test_get_review_models_empty_env_falls_back_to_default(monkeypatch):
     assert models == [m.strip() for m in SETTINGS_DEFAULTS["OUROBOROS_REVIEW_MODELS"].split(",") if m.strip()]
 
 
-def test_get_review_models_falls_back_to_main_light_light_in_openai_only_mode(monkeypatch):
-    """v4.39.0: direct-provider fallback returns [main, light, light] (3 slots,
-    2 unique) instead of the legacy [main]*N so both commit triad and
-    plan_task have a quorum-safe reviewer list out of the box. The light slot
+def test_get_review_models_falls_back_to_main_light_in_openai_only_mode(monkeypatch):
+    """Direct-provider fallback returns [main, light] (2 slots) instead of the
+    legacy [main]*N so both commit review and plan_task have a quorum-safe
+    reviewer list out of the box. The light slot
     picks up the provider default (OPENAI_DIRECT_DEFAULTS['light'] =
     openai::gpt-5.5-mini) when OUROBOROS_MODEL_LIGHT is not explicitly set."""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
@@ -158,7 +158,6 @@ def test_get_review_models_falls_back_to_main_light_light_in_openai_only_mode(mo
 
     assert models == [
         "openai::gpt-5.5",
-        "openai::gpt-5.5-mini",
         "openai::gpt-5.5-mini",
     ]
 
@@ -200,8 +199,8 @@ def test_get_review_models_preserves_explicit_official_openai_list(monkeypatch):
     assert models == ["openai::gpt-5.5", "openai::gpt-4.1"]
 
 
-def test_get_review_models_falls_back_to_main_light_light_in_anthropic_only_mode(monkeypatch):
-    """v4.39.0: same direct-provider fallback as OpenAI — [main, light, light]
+def test_get_review_models_falls_back_to_main_light_in_anthropic_only_mode(monkeypatch):
+    """Same direct-provider fallback as OpenAI — [main, light]
     with light = ANTHROPIC_DIRECT_DEFAULTS['light'] = anthropic::claude-sonnet-4-6
     when OUROBOROS_MODEL_LIGHT is not explicitly set."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
@@ -222,7 +221,6 @@ def test_get_review_models_falls_back_to_main_light_light_in_anthropic_only_mode
     assert models == [
         "anthropic::claude-opus-4-6",
         "anthropic::claude-sonnet-4-6",
-        "anthropic::claude-sonnet-4-6",
     ]
 
 
@@ -232,7 +230,7 @@ def test_get_review_models_and_scope_route_to_gigachat_in_gigachat_only_mode(mon
     gigachat:: models, never to an empty list or an unconfigured foreign provider —
     the single-isolated-provider invariant (docs/DEVELOPMENT.md "Provider
     Independence"). GIGACHAT_DIRECT_DEFAULTS uses GigaChat-3-Ultra for every slot,
-    so the quorum-safe fallback degrades to [main, main, main]."""
+    so the quorum-safe fallback degrades to [main, main]."""
     monkeypatch.setenv("GIGACHAT_CREDENTIALS", "giga-creds")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -252,7 +250,6 @@ def test_get_review_models_and_scope_route_to_gigachat_in_gigachat_only_mode(mon
     scope_models = get_scope_review_models()
 
     assert review_models == [
-        "gigachat::GigaChat-3-Ultra",
         "gigachat::GigaChat-3-Ultra",
         "gigachat::GigaChat-3-Ultra",
     ]

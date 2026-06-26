@@ -151,7 +151,7 @@ class TestPlanReviewModels(unittest.TestCase):
         which returns the shipped triad default when the env is empty — the
         same behavior as the commit triad. This keeps plan_task and commit
         review in lockstep instead of plan_task silently collapsing to
-        ``[main] * 3`` on an unconfigured instance.
+        ``[main] * 2`` on an unconfigured instance.
 
         Hermetic: explicitly clears all provider env vars AND
         ``OPENAI_BASE_URL`` so this test does not depend on shell/CI
@@ -175,14 +175,13 @@ class TestPlanReviewModels(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False):
             models = _get_review_models()
-        self.assertEqual(len(models), 3)
-        # The shipped default is the 3-model OpenRouter triad (GPT-5.4,
-        # Gemini 3.1 Pro Preview, Claude Opus 4.7). Exact identities are
+        self.assertEqual(len(models), 2)
+        # The shipped default is the 2-model reviewer set. Exact identities are
         # version-tracked in config.SETTINGS_DEFAULTS; we just assert the
-        # size and that we did NOT silently collapse to [main] * 3.
+        # size and that we did NOT silently collapse to [main] * 2.
         self.assertFalse(
             all(m == "test/model-x" for m in models),
-            f"plan_task must not silently collapse to main × 3 when the default triad "
+            f"plan_task must not silently collapse to main × 2 when the default reviewer set "
             f"is configured; got {models!r}",
         )
 
@@ -224,7 +223,7 @@ class TestPlanReviewModels(unittest.TestCase):
         Regression guard for v4.33.1 scope review finding
         ``plan_task_review_model_parity`` + v4.39.0 quorum-safe-fallback fix:
         ``config.get_review_models``'s OpenAI-only / Anthropic-only fallback
-        now rewrites the list to ``[main, light, light]`` (3 slots)
+        now rewrites the list to ``[main, light]`` (2 slots)
         when the configured reviewers don't match the exclusive direct-
         provider prefix, and ``_get_review_models`` must see that shape
         unchanged. Duplicate model IDs are valid stochastic reviewer slots.
@@ -246,16 +245,15 @@ class TestPlanReviewModels(unittest.TestCase):
         }
         with patch.dict(os.environ, env, clear=False):
             models = _get_review_models()
-        # Expect the Anthropic-only fallback: `[main, light, light]`.
-        self.assertEqual(len(models), 3)
+        # Expect the Anthropic-only fallback: `[main, light]`.
+        self.assertEqual(len(models), 2)
         self.assertEqual(
             models,
             [
                 "anthropic::claude-opus-4-6",
                 "anthropic::claude-sonnet-4-6",
-                "anthropic::claude-sonnet-4-6",
             ],
-            f"expected [main, light, light] direct-provider fallback, got {models!r}",
+            f"expected [main, light] direct-provider fallback, got {models!r}",
         )
 
 

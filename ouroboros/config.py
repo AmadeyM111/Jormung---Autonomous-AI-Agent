@@ -110,7 +110,7 @@ SETTINGS_DEFAULTS = {
     "OUROBOROS_EVO_COST_THRESHOLD": 0.10,
     "OUROBOROS_WEBSEARCH_MODEL": "gpt-5.2",
     # Pre-commit review: comma-separated provider-tagged model list
-    "OUROBOROS_REVIEW_MODELS": "openai/gpt-5.5,google/gemini-3.5-flash,anthropic/claude-opus-4.8",
+    "OUROBOROS_REVIEW_MODELS": "groq::compound,qwen/qwen3.6-flash",
     # Pre-commit review enforcement: advisory | blocking
     "OUROBOROS_REVIEW_ENFORCEMENT": "advisory",
     # Auto-grant reviewed-skill requests by default; grants stay bound to the
@@ -193,7 +193,7 @@ def get_consciousness_model() -> str:
     )
 
 _VALID_EFFORTS = ("none", "low", "medium", "high")
-_DIRECT_PROVIDER_REVIEW_RUNS = 3
+_DIRECT_PROVIDER_REVIEW_RUNS = 2
 
 # Runtime mode and review enforcement are separate axes.
 VALID_RUNTIME_MODES = ("light", "advanced", "pro")

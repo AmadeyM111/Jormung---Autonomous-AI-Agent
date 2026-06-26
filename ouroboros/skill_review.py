@@ -792,9 +792,6 @@ def _build_review_prompt(
         checklist_section = (
             f"(⚠️ SKILL_REVIEW_ERROR: checklist section missing: {exc})"
         )
-    architecture_text = _load_governance_artifact(_REPO_ROOT, "docs/ARCHITECTURE.md")
-    development_text = _load_governance_artifact(_REPO_ROOT, "docs/DEVELOPMENT.md")
-    bible_text = _load_governance_artifact(_REPO_ROOT, "BIBLE.md")
     skill_host_context = build_skill_host_context(_REPO_ROOT)
     items_json = json.dumps(list(_SKILL_REVIEW_ITEMS))
     advisory_section = ""
@@ -825,49 +822,40 @@ review enforcement mode.
 {manifest_dump}
 ```
 
-## Checklist (source of truth — follow it literally)
-
-{checklist_section}
-
-## Governance context — docs/ARCHITECTURE.md
-
-Use Section 10 (Key Invariants), Section 12 (Host Service / Companion /
-Chat IDs), and Section 13 (External Skills Layer)
-as the binding description of what the skill is allowed to touch. In
-particular invariant 11 is the authoritative rule: skills must not write
-to the self-modifying repo, and reviewed execution is the primary gate.
-
-{architecture_text}
-
-## Governance context — docs/DEVELOPMENT.md
-
-Use this as the engineering-standards baseline when judging
-``timeout_and_output_discipline`` and when checking whether the skill's
-code conforms to the module/function size expectations and the
-no-silent-truncation rule for cognitive artifacts.
-
-{development_text}
-
-## Governance context — BIBLE.md
-
-BIBLE.md is Ouroboros' constitutional core. Skills execute inside the
-Ouroboros runtime, so a skill that violates a constitutional principle
-(for example P0 bounded agency, or P9 version-history limits if the
-skill manipulates release metadata) is grounds for FAIL even when the
-Skill Review Checklist items permit the behaviour in isolation. Treat
-BIBLE.md as the tie-breaker when a skill looks checklist-compliant but
-contradicts the runtime's constitutional commitments.
-
-{bible_text}
+## Host runtime
 
 {skill_host_context}
 
 ## Skill files (every runtime-reachable file in skill_dir, text-only)
 
 {file_pack}
+
 {advisory_section}
 {build_rebuttal_section(review_rebuttal)}
 {review_history_section}
+
+## Checklist (source of truth — follow it literally)
+
+{checklist_section}
+
+## Governance context summary
+
+docs/ARCHITECTURE.md defines runtime boundaries, extension dispatch, skill state,
+grants, and host-service surfaces.
+docs/DEVELOPMENT.md defines engineering standards for reviewed changes, bounded
+execution, and native-risk extension dispatch.
+BIBLE.md defines constitutional constraints for agency, continuity, immune
+integrity, reviewability, and version-history discipline.
+
+The reviewer should additionally verify the following runtime invariants:
+
+• Skills must not modify the Ouroboros repository.
+• Skills may write only inside their own state directory.
+• Secrets must be requested exclusively through the grants system.
+• Skills must not exfiltrate secrets.
+• Network capabilities must match the declared permissions.
+• Extension tools must register only within the skill's own namespace.
+• Long-running background work must be explicitly declared and bounded.
 
 ## Output contract
 

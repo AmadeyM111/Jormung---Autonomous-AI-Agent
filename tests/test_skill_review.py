@@ -1161,10 +1161,16 @@ def test_review_skill_prompt_loads_core_governance_artifacts(tmp_path, monkeypat
     assert "BIBLE.md" in prompt, (
         "skill review prompt must cite BIBLE.md for constitutional context"
     )
-    # Minimal content-presence check: Section 10 key-invariants header is
-    # referenced by label, and the actual body should appear (shipping
-    # repo has the canonical text there).
-    assert "Key Invariants" in prompt
+    assert "## Governance context summary" in prompt
+    assert "docs/ARCHITECTURE.md defines runtime boundaries" in prompt
+    assert "docs/DEVELOPMENT.md defines engineering standards" in prompt
+    assert "BIBLE.md defines constitutional constraints" in prompt
+    assert "Skills must not modify the Ouroboros repository." in prompt
+    assert "Skills may write only inside their own state directory." in prompt
+    assert "Secrets must be requested exclusively through the grants system." in prompt
+    assert "Skills must not exfiltrate secrets." in prompt
+    assert "Extension tools must register only within the skill's own namespace." in prompt
+    assert "## Principle 0: Agency" not in prompt
 
 
 def test_review_skill_persist_false_does_not_write(tmp_path, monkeypatch):

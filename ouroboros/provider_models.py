@@ -76,11 +76,11 @@ def compute_direct_review_models_fallback(
     main_model: str,
     light_model: str = "",
     *,
-    review_runs: int = 3,
+    review_runs: int = 2,
 ) -> list[str]:
     """Return direct-provider review fallback preserving commit-triad shape.
 
-    The quorum-safe shape is ``[main, light, light]`` when main/light are
+    The quorum-safe shape is ``[main, light]`` when main/light are
     distinct provider-prefixed lanes; otherwise it degrades to ``[main] * N``.
     """
     if provider not in _DIRECT_PROVIDER_DEFAULTS:
@@ -93,8 +93,8 @@ def compute_direct_review_models_fallback(
     default_light = migrate_model_value(provider, _DIRECT_PROVIDER_DEFAULTS[provider].get("light", ""))
     light_slot = light if light.startswith(provider_prefix) else default_light
     if light_slot and light_slot != main:
-        return [main, light_slot, light_slot]
-    return [main] * int(review_runs or 3)
+        return [main, light_slot]
+    return [main] * int(review_runs or 2)
 
 
 def normalize_model_identity(model: str) -> str:
