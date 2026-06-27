@@ -20,12 +20,33 @@ import logging
 from ouroboros.llm import LLMClient, LocalContextTooLargeError, add_usage
 from ouroboros.observability import new_call_id, new_execution_id, persist_call
 from ouroboros.pricing import emit_llm_usage_event, estimate_cost, infer_model_category
+from ouroboros.provider_errors import classify_provider_error
 from ouroboros.utils import append_jsonl, emit_log_event, sanitize_tool_result_for_log, utc_now_iso
 from ouroboros.config import get_context_mode
 
 log = logging.getLogger(__name__)
 
 MAIN_LOOP_MAX_TOKENS = 65_536
+_TASK_OUTPUT_TOKEN_BUDGETS = {
+    "classification": 512,
+    "routing": 512,
+    "consciousness": 2_048,
+    "summarize": 2_048,
+    "summary": 2_048,
+    "review": 8_192,
+    "scope_review": 8_192,
+    "deep_self_review": 8_192,
+    "generation": 8_192,
+    "evolution": 16_384,
+}
+
+
+def output_token_budget(task_type: str, *, has_tools: bool) -> int:
+    """Return an output reservation sized for the semantic task lane."""
+    lane = str(task_type or "task").strip().lower().replace("-", "_")
+    if lane in _TASK_OUTPUT_TOKEN_BUDGETS:
+        return _TASK_OUTPUT_TOKEN_BUDGETS[lane]
+    return 8_192 if has_tools else 4_096
 
 
 @dataclass
@@ -153,6 +174,7 @@ def _record_llm_call_error(
     local context overflow, signalling the caller to stop retrying.
     """
     safe_error = sanitize_tool_result_for_log(repr(error))
+    error_info = classify_provider_error(error)
     _emit_live_log(ctx.event_queue, {
         "type": "llm_round_error",
         "task_id": ctx.task_id,
@@ -164,6 +186,9 @@ def _record_llm_call_error(
         "attempt": ctx.attempt + 1,
         "model": ctx.model,
         "error": safe_error,
+        "error_kind": error_info.kind.value,
+        "status_code": error_info.status_code,
+        "retryable": error_info.retryable,
     })
     append_jsonl(ctx.drive_logs / "events.jsonl", {
         "ts": utc_now_iso(), "type": "llm_api_error",
@@ -173,9 +198,20 @@ def _record_llm_call_error(
         "llm_call_id": ctx.llm_call_id,
         "round": ctx.round_idx, "attempt": ctx.attempt + 1,
         "model": ctx.model, "error": safe_error,
+        "error_kind": error_info.kind.value,
+        "status_code": error_info.status_code,
+        "retryable": error_info.retryable,
         "request_ref": ctx.request_ref.get("manifest_ref") if ctx.request_ref else None,
     })
     ctx.accumulated_usage["_last_llm_error"] = _short_error_text(safe_error)
+    ctx.accumulated_usage["_last_llm_error_kind"] = error_info.kind.value
+    ctx.accumulated_usage["_last_llm_error_status"] = error_info.status_code
+    ctx.accumulated_usage.setdefault("_llm_error_history", []).append({
+        "model": ctx.model,
+        "kind": error_info.kind.value,
+        "status_code": error_info.status_code,
+        "retryable": error_info.retryable,
+    })
     ctx.accumulated_usage["execution_status"] = "infra_failed"
     ctx.accumulated_usage["reason_code"] = "llm_api_error"
     # Context-window overflow while NOT already in low: surface a one-time owner
@@ -236,6 +272,7 @@ def call_llm_with_retry(
     drive_root = pathlib.Path(drive_logs).parent
     execution_id = str(accumulated_usage.setdefault("execution_id", new_execution_id()))
     round_id = f"{execution_id}:round:{round_idx}"
+    max_output_tokens = output_token_budget(task_type, has_tools=bool(tools))
 
     for attempt in range(max_retries):
         llm_call_id = new_call_id("llm")
@@ -253,12 +290,13 @@ def call_llm_with_retry(
                 "model": model,
                 "reasoning_effort": effort,
                 "use_local": bool(use_local),
+                "max_tokens": max_output_tokens,
             })
             kwargs = {
                 "messages": messages,
                 "model": model,
                 "reasoning_effort": effort,
-                "max_tokens": MAIN_LOOP_MAX_TOKENS,
+                "max_tokens": max_output_tokens,
                 "use_local": use_local,
             }
             if tools:
@@ -274,7 +312,7 @@ def call_llm_with_retry(
                         "tools": tools or [],
                         "model": model,
                         "reasoning_effort": effort,
-                        "max_tokens": MAIN_LOOP_MAX_TOKENS,
+                        "max_tokens": max_output_tokens,
                         "use_local": bool(use_local),
                     },
                     manifest={
@@ -292,6 +330,8 @@ def call_llm_with_retry(
             resp_msg, usage = llm.chat(**kwargs)
             msg = resp_msg
             accumulated_usage.pop("_last_llm_error", None)
+            accumulated_usage.pop("_last_llm_error_kind", None)
+            accumulated_usage.pop("_last_llm_error_status", None)
 
             cost, display_model, provider, cost_estimated = _normalize_usage_cost(
                 usage,
@@ -456,7 +496,7 @@ def call_llm_with_retry(
 
         except Exception as e:
             last_error = e
-            if _record_llm_call_error(
+            stop_retrying = _record_llm_call_error(
                 e,
                 _LlmErrorContext(
                     task_id=task_id,
@@ -472,7 +512,9 @@ def call_llm_with_retry(
                     event_queue=event_queue,
                     accumulated_usage=accumulated_usage,
                 ),
-            ):
+            )
+            error_info = classify_provider_error(e)
+            if stop_retrying or not error_info.retryable:
                 break
             if attempt < max_retries - 1:
                 time.sleep(min(2 ** attempt * 2, 30))

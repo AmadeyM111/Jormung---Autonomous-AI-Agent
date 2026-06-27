@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from ouroboros.provider_models import normalize_anthropic_model_id, normalize_model_identity
+from ouroboros.provider_errors import ProviderErrorKind, classify_provider_error
 from ouroboros.utils import in_worker_process
 
 log = logging.getLogger(__name__)
@@ -396,7 +397,9 @@ class LLMClient:
         payload: Dict[str, Any],
         exc: BaseException,
     ) -> List[Dict[str, Any]]:
-        if not cls._tpm_request_too_large_error(exc):
+        error_info = classify_provider_error(exc)
+        is_tpm_overage = cls._tpm_request_too_large_error(exc)
+        if not is_tpm_overage and error_info.kind is not ProviderErrorKind.BUDGET_EXCEEDED:
             return []
 
         key = "max_completion_tokens" if "max_completion_tokens" in payload else "max_tokens"
@@ -408,24 +411,32 @@ class LLMClient:
         if current <= 0:
             return []
 
+        minimum = 16 if is_tpm_overage else (_positive_int_env("OUROBOROS_MIN_OUTPUT_TOKENS") or 512)
         candidates = []
-        for next_budget in (current // 2, current // 4, 64, 32, 16):
-            next_budget = int(next_budget)
-            if next_budget <= 0 or next_budget >= current:
-                continue
+        next_budget = current // 2
+        while next_budget >= minimum:
             candidates.append(next_budget)
+            next_budget //= 2
+        if current > minimum:
+            candidates.append(minimum)
+        if is_tpm_overage:
+            candidates.extend((64, 32, 16))
         seen: set[int] = set()
         retries: List[Dict[str, Any]] = []
         for next_budget in candidates:
+            next_budget = int(next_budget)
+            if next_budget <= 0 or next_budget >= current:
+                continue
             if next_budget in seen:
                 continue
             seen.add(next_budget)
             retry_payload = copy.deepcopy(payload)
             retry_payload[key] = next_budget
             log.warning(
-                "Retrying with reduced %s=%s after TPM overage",
+                "Retrying with reduced %s=%s after %s",
                 key,
                 next_budget,
+                "TPM overage" if is_tpm_overage else "provider budget rejection",
             )
             retries.append(retry_payload)
         return retries
@@ -2284,12 +2295,16 @@ class LLMClient:
         try:
             return create_fn(**kwargs)
         except Exception as exc:
+            active_exc = exc
             for retry_kwargs in self._retry_with_lower_completion_budget(kwargs, exc):
                 try:
                     return create_fn(**retry_kwargs)
-                except Exception:
-                    continue
-            retry_kwargs = self._retry_without_optional_sampling(kwargs, usage_model, exc)
+                except Exception as retry_exc:
+                    active_exc = retry_exc
+                    retry_info = classify_provider_error(retry_exc)
+                    if not self._tpm_request_too_large_error(retry_exc) and not retry_info.shrink_output:
+                        raise
+            retry_kwargs = self._retry_without_optional_sampling(kwargs, usage_model, active_exc)
             if retry_kwargs is not None:
                 try:
                     return create_fn(**retry_kwargs)
@@ -2298,9 +2313,9 @@ class LLMClient:
                     if stripped_kwargs is None:
                         raise
                     return create_fn(**stripped_kwargs)
-            stripped_kwargs = self._openrouter_signature_retry_kwargs(target, kwargs, exc)
+            stripped_kwargs = self._openrouter_signature_retry_kwargs(target, kwargs, active_exc)
             if stripped_kwargs is None:
-                raise
+                raise active_exc
             return create_fn(**stripped_kwargs)
 
     async def _create_chat_completion_with_retries_async(
@@ -2313,12 +2328,16 @@ class LLMClient:
         try:
             return await create_fn(**kwargs)
         except Exception as exc:
+            active_exc = exc
             for retry_kwargs in self._retry_with_lower_completion_budget(kwargs, exc):
                 try:
                     return await create_fn(**retry_kwargs)
-                except Exception:
-                    continue
-            retry_kwargs = self._retry_without_optional_sampling(kwargs, usage_model, exc)
+                except Exception as retry_exc:
+                    active_exc = retry_exc
+                    retry_info = classify_provider_error(retry_exc)
+                    if not self._tpm_request_too_large_error(retry_exc) and not retry_info.shrink_output:
+                        raise
+            retry_kwargs = self._retry_without_optional_sampling(kwargs, usage_model, active_exc)
             if retry_kwargs is not None:
                 try:
                     return await create_fn(**retry_kwargs)
@@ -2327,9 +2346,9 @@ class LLMClient:
                     if stripped_kwargs is None:
                         raise
                     return await create_fn(**stripped_kwargs)
-            stripped_kwargs = self._openrouter_signature_retry_kwargs(target, kwargs, exc)
+            stripped_kwargs = self._openrouter_signature_retry_kwargs(target, kwargs, active_exc)
             if stripped_kwargs is None:
-                raise
+                raise active_exc
             return await create_fn(**stripped_kwargs)
 
     def _chat_remote(

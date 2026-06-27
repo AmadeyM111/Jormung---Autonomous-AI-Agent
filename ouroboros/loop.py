@@ -513,6 +513,21 @@ def _provider_failure_hint(accumulated_usage: Dict[str, Any]) -> str:
     return f" Last provider error: {detail}"
 
 
+def _provider_failure_summary(accumulated_usage: Dict[str, Any]) -> str:
+    kind = str(accumulated_usage.get("_last_llm_error_kind") or "unknown")
+    if kind == "budget_exceeded":
+        return "The provider rejected the request for insufficient credit even after automatic output shrinking."
+    if kind == "rate_limited":
+        return "The provider is rate-limited; configured fallback models were also unable to answer."
+    if kind == "authentication_error":
+        return "A provider rejected its credentials; check the API key for the affected model."
+    if kind == "context_too_large":
+        return "The request exceeded the model context window."
+    if kind == "provider_down":
+        return "The provider is temporarily unavailable."
+    return "Configured models could not complete the request."
+
+
 def _provider_recovery_hint(accumulated_usage: Dict[str, Any]) -> str:
     """Explain whether retrying later is likely to help."""
     if accumulated_usage.get("context_overflow_suggest_low"):
@@ -1374,8 +1389,8 @@ def _try_fallback_chain_after_empty_response(
 
     fallback_label = ", ".join(attempted_fallbacks) if attempted_fallbacks else "(none)"
     return None, (
-        f"⚠️ All models are down. Primary ({active_model}{primary_tag}) and fallback chain ({fallback_label}) "
-        f"both returned no response. Stopping.{_provider_failure_hint(accumulated_usage)} "
+        f"⚠️ {_provider_failure_summary(accumulated_usage)} Primary ({active_model}{primary_tag}); "
+        f"fallback chain attempted: {fallback_label}.{_provider_failure_hint(accumulated_usage)} "
         f"{_provider_recovery_hint(accumulated_usage)}"
     )
 

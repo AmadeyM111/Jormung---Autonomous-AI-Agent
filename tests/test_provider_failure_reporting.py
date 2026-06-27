@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from ouroboros.loop import _provider_failure_hint
+from ouroboros.loop import _provider_failure_hint, _provider_failure_summary
 from ouroboros.loop_llm_call import call_llm_with_retry
 
 
@@ -69,6 +69,13 @@ def test_provider_failure_hint_formats_detail():
 
 def test_provider_failure_hint_empty_without_error():
     assert _provider_failure_hint({}) == ""
+
+
+def test_provider_failure_summary_does_not_call_budget_error_an_outage():
+    summary = _provider_failure_summary({"_last_llm_error_kind": "budget_exceeded"})
+
+    assert "insufficient credit" in summary
+    assert "down" not in summary.lower()
 
 
 def test_call_llm_with_retry_accumulates_estimated_cost(tmp_path):

@@ -562,6 +562,37 @@ def test_openai_compatible_tpm_error_retries_with_lower_completion_budget():
     assert [call["max_tokens"] for call in calls] == [256, 128, 64]
 
 
+def test_openrouter_budget_error_retries_down_to_affordable_output():
+    from ouroboros.llm import LLMClient
+
+    client = LLMClient()
+    target = client._resolve_remote_target("qwen/qwen3.6-flash")
+    kwargs = {
+        "model": "qwen/qwen3.6-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 8192,
+    }
+    calls = []
+
+    class _Resp:
+        def model_dump(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    def fake_create(**call_kwargs):
+        calls.append(call_kwargs)
+        if call_kwargs["max_tokens"] > 512:
+            raise RuntimeError(
+                "Error code: 402 - This request requires more credits. "
+                "You requested up to 8192 tokens, but can only afford 847."
+            )
+        return _Resp()
+
+    resp = client._create_chat_completion_with_retries(fake_create, kwargs, target)
+
+    assert resp.model_dump()["choices"][0]["message"]["content"] == "ok"
+    assert [call["max_tokens"] for call in calls] == [8192, 4096, 2048, 1024, 512]
+
+
 def test_openrouter_default_caps_main_loop_max_tokens(monkeypatch):
     from ouroboros.llm import LLMClient
 
