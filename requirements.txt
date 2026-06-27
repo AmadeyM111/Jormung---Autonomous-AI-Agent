@@ -12,6 +12,8 @@ huggingface_hub
 PyYAML>=6.0
 croniter
 tzdata
+arize-phoenix-otel>=0.16.1,<0.17.0
+openinference-instrumentation-openai>=0.1.52,<0.2.0
 pytest>=7.0
 claude-agent-sdk>=0.1.60
 # MCP (Model Context Protocol) client. The runtime guards imports so a

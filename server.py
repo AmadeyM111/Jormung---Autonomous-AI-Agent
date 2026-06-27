@@ -42,11 +42,13 @@ from ouroboros.gateway.ws import (
 REPO_DIR = pathlib.Path(os.environ.get("OUROBOROS_REPO_DIR", pathlib.Path(__file__).parent))
 DATA_DIR = pathlib.Path(os.environ.get("OUROBOROS_DATA_DIR",
     pathlib.Path.home() / "Ouroboros" / "data"))
+
+sys.path.insert(0, str(REPO_DIR))
+
 DEFAULT_HOST = os.environ.get("OUROBOROS_SERVER_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("OUROBOROS_SERVER_PORT", "8765"))
 PORT_FILE = DATA_DIR / "state" / "server_port"
 
-sys.path.insert(0, str(REPO_DIR))
 if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
     _agent_python = sys.executable
     if isinstance(_agent_python, str) and _agent_python:
@@ -70,6 +72,10 @@ else:
     _file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
     logging.basicConfig(level=logging.INFO, format=_LOG_FORMAT, handlers=[_file_handler, logging.StreamHandler()])
 log = logging.getLogger("server")
+
+from ouroboros.phoenix_tracing import setup_phoenix_tracing
+
+setup_phoenix_tracing()
 
 RESTART_EXIT_CODE = 42
 PANIC_EXIT_CODE = 99

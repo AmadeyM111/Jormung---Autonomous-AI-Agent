@@ -45,6 +45,8 @@ dependencies = [
     "tzdata",
     # Python 3.10 needs typing_extensions.NotRequired for gateway contracts.
     "typing_extensions>=4.5.0",
+    "arize-phoenix-otel (>=0.16.1,<0.17.0)",
+    "openinference-instrumentation-openai (>=0.1.52,<0.2.0)",
 ]
 
 [project.scripts]

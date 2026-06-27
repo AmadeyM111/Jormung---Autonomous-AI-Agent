@@ -1,4 +1,12 @@
 services:
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: phoenix
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+    restart: unless-stopped
+
   ouroboros:
     build: .
     container_name: ouroboros-agent
@@ -11,9 +19,18 @@ services:
       OUROBOROS_DATA_DIR: /ouroboros/data
       OUROBOROS_REPO_DIR: /ouroboros
       OUROBOROS_FILE_BROWSER_DEFAULT: /ouroboros
+
+      PHOENIX_ENABLED: "true"
+      PHOENIX_COLLECTOR_ENDPOINT: "http://phoenix:6006/v1/traces"
+      PHOENIX_PROJECT_NAME: "ouroboros-local"
+      PHOENIX_PROTOCOL: "http/protobuf"
+      PHOENIX_BATCH: "true"
+
     volumes:
       - ./data:/ouroboros/data
       - ./.knowledge:/ouroboros/.knowledge:ro
+    depends_on:
+      - phoenix
     restart: unless-stopped
     command:
       - telegram

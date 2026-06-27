@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import difflib
 import hashlib
 import html
 import ipaddress
@@ -38,6 +39,14 @@ _MAX_HTML_BYTES = 4 * 1024 * 1024
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _USER_AGENT = "Ouroboros-PostBroadcast/0.1"
 _TELEGRAM_PHOTO_CAPTION_LIMIT = 1024
+_MIN_GENERATED_CAPTION_CHARS = 80
+_RECENT_CAPTION_LIMIT = 12
+_CAPTION_SIMILARITY_LIMIT = 0.86
+_DEFAULT_VISION_MODEL = "groq::meta-llama/llama-4-scout-17b-16e-instruct"
+_REJECTED_CAPTION_PHRASES = (
+    "кот в кадре демонстрирует уверенность старшего инженера",
+    "кот занял рабочее место и выглядит так, будто сейчас закроет спринт",
+)
 
 _DEFAULT_CONFIG: Dict[str, Any] = {
     "schema_version": 1,
@@ -585,6 +594,30 @@ def _candidate_items(records: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
         yield item
 
 
+def _caption_generation_config(config: Dict[str, Any], records: Dict[str, Any]) -> Dict[str, Any]:
+    recent_captions = [
+        str(record.get("caption") or "").strip()[:500]
+        for record in records.get("items", [])
+        if isinstance(record, dict) and str(record.get("caption") or "").strip()
+    ][:_RECENT_CAPTION_LIMIT]
+    return {
+        "required": True,
+        "required_subject": "cat",
+        "vision_tool": "vlm_query",
+        "vision_model": _DEFAULT_VISION_MODEL,
+        "vision_prompt": (
+            "Сначала напиши ровно SUBJECT: CAT, если на изображении виден кот или кошка, либо "
+            "SUBJECT: NOT_CAT, если кошки нет. Затем опиши только то, что действительно видно: "
+            "животное, его позу, выражение, предметы, обстановку и читаемый текст. Для CAT предложи "
+            "оригинальную информативную подпись на русском с одной лёгкой шуткой. Не повторяй "
+            "прежние подписи и не используй заголовок источника как заголовок поста."
+        ),
+        "min_chars": _MIN_GENERATED_CAPTION_CHARS,
+        "max_chars": int((config.get("rewrite") or {}).get("max_caption_chars") or 700),
+        "recent_captions_to_avoid": recent_captions,
+    }
+
+
 def _prepare_next(state_dir: pathlib.Path, *, refresh: bool = True) -> Dict[str, Any]:
     config = _load_config(state_dir)
     refresh_status = _refresh(state_dir) if refresh else {"enabled": False}
@@ -592,6 +625,8 @@ def _prepare_next(state_dir: pathlib.Path, *, refresh: bool = True) -> Dict[str,
     moderation = config.get("moderation") if isinstance(config.get("moderation"), dict) else {}
     prepared = _read_json(_state_path(state_dir, _PREPARED_FILE), {})
     if isinstance(prepared, dict) and prepared.get("prepared_id"):
+        prepared["caption_generation"] = _caption_generation_config(config, records)
+        _atomic_write_json(_state_path(state_dir, _PREPARED_FILE), prepared)
         return {"ok": True, "has_prepared": True, "prepared": prepared, "refresh": refresh_status}
 
     failures: List[Dict[str, str]] = []
@@ -614,6 +649,7 @@ def _prepare_next(state_dir: pathlib.Path, *, refresh: bool = True) -> Dict[str,
             "source_url": str(item.get("url") or ""),
             "image_url": str(item.get("image_url") or ""),
             "image_path": str(item.get("image_path") or ""),
+            "caption_generation": _caption_generation_config(config, records),
             "rewrite_style": config.get("rewrite", {}),
             "telegram": {
                 "chat_ids": _effective_chat_ids(state_dir, config),
@@ -627,28 +663,62 @@ def _prepare_next(state_dir: pathlib.Path, *, refresh: bool = True) -> Dict[str,
     return {"ok": True, "has_prepared": False, "reason": "no unsent image posts available", "failures": failures[:10], "refresh": refresh_status}
 
 
-def _clamp_caption(caption: str, source_url: str, append_source_link: bool) -> str:
+def _clamp_caption(caption: str, source_url: str, append_source_link: bool, max_caption_chars: int = 700) -> str:
+    limit = min(_TELEGRAM_PHOTO_CAPTION_LIMIT, max(120, int(max_caption_chars or 700)))
     text = str(caption or "").strip()
-    if append_source_link and source_url and source_url not in text:
-        text = (text + "\n\n" if text else "") + f"Source: {source_url}"
-    if len(text) > _TELEGRAM_PHOTO_CAPTION_LIMIT:
-        text = text[: _TELEGRAM_PHOTO_CAPTION_LIMIT - 1].rstrip() + "..."
+    source_suffix = f"\n\nSource: {source_url}" if append_source_link and source_url and source_url not in text else ""
+    body_limit = limit - len(source_suffix)
+    if len(text) > body_limit:
+        text = text[: body_limit - 3].rstrip() + "..."
+    text += source_suffix
     return text
 
 
-def _fallback_caption(prepared: Dict[str, Any]) -> str:
-    title = str(prepared.get("title") or prepared.get("source_text") or "").strip()
-    if title and title.lower() not in {"cat memes", "cats", "memes"}:
-        return (
-            f"{title}\n\n"
-            "Кот в кадре демонстрирует уверенность старшего инженера: лапа уже на клавиатуре, "
-            "мышь под контролем, задача почти решена. Осталось понять, кто открыл 47 вкладок."
-        )
-    return (
-        "Кот занял рабочее место и выглядит так, будто сейчас закроет спринт, "
-        "перепишет документацию и случайно отправит отчёт всем в чате. "
-        "Настоящий мем про продуктивность: главное — держать лапу на клавиатуре и делать вид, что всё под контролем."
-    )
+def _caption_comparison_text(caption: str) -> str:
+    lines = []
+    for line in str(caption or "").splitlines():
+        clean = line.strip()
+        if re.match(r"^(?:source|источник)\s*:", clean, flags=re.IGNORECASE):
+            continue
+        lines.append(clean)
+    text = " ".join(lines).lower()
+    text = re.sub(r"https?://\S+", " ", text)
+    return re.sub(r"[^a-zа-яё0-9]+", " ", text, flags=re.IGNORECASE).strip()
+
+
+def _validate_generated_caption(caption: str, records: Dict[str, Any], prepared: Dict[str, Any]) -> str:
+    normalized = _caption_comparison_text(caption)
+    if not normalized:
+        return "caption is required; generate it from the prepared image with vlm_query"
+    if len(normalized) < _MIN_GENERATED_CAPTION_CHARS:
+        return f"caption is too short; provide at least {_MIN_GENERATED_CAPTION_CHARS} informative characters"
+    if any(phrase in normalized for phrase in _REJECTED_CAPTION_PHRASES):
+        return "caption repeats a retired static template; analyze the current image and generate a new caption"
+    first_line = next((line.strip().lower() for line in str(caption).splitlines() if line.strip()), "")
+    source_titles = {
+        str(prepared.get("title") or "").strip().lower(),
+        str(prepared.get("source_title") or "").strip().lower(),
+        "cat memes",
+        "hello memes",
+    }
+    if first_line and first_line in source_titles:
+        return "caption starts with a generic source title; begin with a concrete description of the current image"
+
+    recent = [
+        _caption_comparison_text(str(item.get("caption") or ""))
+        for item in records.get("items", [])
+        if isinstance(item, dict) and str(item.get("caption") or "").strip()
+    ][:_RECENT_CAPTION_LIMIT]
+    for previous in recent:
+        if not previous:
+            continue
+        similarity = difflib.SequenceMatcher(None, normalized, previous).ratio()
+        if similarity >= _CAPTION_SIMILARITY_LIMIT:
+            return (
+                f"caption is too similar to a recent broadcast ({similarity:.0%}); "
+                "analyze the current image and generate substantially different wording"
+            )
+    return ""
 
 
 def _telegram_send_photo(token: str, chat_id: str, image_path: pathlib.Path, caption: str) -> Dict[str, Any]:
@@ -709,6 +779,15 @@ def _send_prepared(
     prepared = _read_json(_state_path(state_dir, _PREPARED_FILE), {})
     if not isinstance(prepared, dict) or not prepared.get("prepared_id"):
         return {"ok": False, "error": "no prepared post"}
+    records = _load_records(state_dir)
+    caption_error = _validate_generated_caption(caption, records, prepared)
+    if caption_error:
+        return {
+            "ok": False,
+            "error": caption_error,
+            "prepared_id": str(prepared.get("prepared_id") or ""),
+            "retryable": True,
+        }
     requested_prepared_id = str(prepared_id or "").strip()
     current_prepared_id = str(prepared.get("prepared_id") or "")
     stale_prepared_id = bool(requested_prepared_id and requested_prepared_id != current_prepared_id)
@@ -716,9 +795,10 @@ def _send_prepared(
     if not image_path.is_file():
         return {"ok": False, "error": f"prepared image is missing: {image_path}"}
     final_caption = _clamp_caption(
-        caption or _fallback_caption(prepared),
+        caption,
         str(prepared.get("source_url") or ""),
         bool(telegram.get("append_source_link", True)),
+        int((config.get("rewrite") or {}).get("max_caption_chars") or 700),
     )
     results = []
     ok_count = 0
@@ -730,7 +810,6 @@ def _send_prepared(
         if result.get("ok"):
             ok_count += 1
         results.append({"chat_id": chat_id, "ok": bool(result.get("ok")), "result": result})
-    records = _load_records(state_dir)
     for item in records.get("items", []):
         if isinstance(item, dict) and str(item.get("id") or "") == str(prepared.get("prepared_id") or ""):
             item["status"] = "sent" if ok_count == len(chat_ids) else "failed"
@@ -747,6 +826,27 @@ def _send_prepared(
         payload["requested_prepared_id"] = requested_prepared_id
         payload["current_prepared_id"] = current_prepared_id
     return payload
+
+
+def _skip_prepared(state_dir: pathlib.Path, *, prepared_id: str = "", reason: str = "") -> Dict[str, Any]:
+    prepared = _read_json(_state_path(state_dir, _PREPARED_FILE), {})
+    current_id = str(prepared.get("prepared_id") or "") if isinstance(prepared, dict) else ""
+    if not current_id:
+        return {"ok": False, "error": "no prepared post"}
+    requested_id = str(prepared_id or "").strip()
+    if requested_id and requested_id != current_id:
+        return {"ok": False, "error": "prepared_id does not match current prepared post"}
+    records = _load_records(state_dir)
+    skip_reason = str(reason or "image does not match required subject").strip()[:500]
+    for item in records.get("items", []):
+        if isinstance(item, dict) and str(item.get("id") or "") == current_id:
+            item["status"] = "skipped"
+            item["last_error"] = skip_reason
+            item["skipped_at"] = _utc_now()
+            break
+    _save_records(state_dir, records)
+    _atomic_write_json(_state_path(state_dir, _PREPARED_FILE), {})
+    return {"ok": True, "skipped_id": current_id, "reason": skip_reason}
 
 
 def _list_status(state_dir: pathlib.Path) -> Dict[str, Any]:
@@ -849,9 +949,10 @@ def register(api: Any) -> None:
             ensure_ascii=False,
         ),
         description=(
-            "Prepare one unsent image-required post for LLM caption rewrite. Use this first in the scheduled "
-            "post_broadcast workflow; then call send_prepared with an original Russian caption that describes "
-            "the visible image, is informative, lightly funny, and not just the source title."
+            "Prepare one unsent image-required post for LLM caption rewrite. After this call, you MUST call "
+            "the core vlm_query tool with prepared.image_url and prepared.caption_generation.vision_prompt. "
+            "Use that visual analysis to write a new Russian caption, then call send_prepared. Avoid every "
+            "caption in prepared.caption_generation.recent_captions_to_avoid."
         ),
         schema={"type": "object", "properties": {"refresh": {"type": "boolean"}}},
         timeout_sec=120,
@@ -869,8 +970,8 @@ def register(api: Any) -> None:
         ),
         description=(
             "Send the currently prepared image post to configured Telegram chats using TELEGRAM_BOT_TOKEN. "
-            "Pass a non-empty Russian caption that describes the visible image; do not send generic titles "
-            "such as 'Cat memes'."
+            "Pass a non-empty Russian caption generated after vlm_query analyzed prepared.image_url. Empty, "
+            "retired-template, and recently repeated captions are rejected while the post remains prepared."
         ),
         schema={
             "type": "object",
@@ -880,6 +981,24 @@ def register(api: Any) -> None:
             },
         },
         timeout_sec=60,
+    )
+    api.register_tool(
+        "skip_prepared",
+        lambda prepared_id="", reason="": json.dumps(
+            _skip_prepared(state_dir, prepared_id=str(prepared_id or ""), reason=str(reason or "")),
+            ensure_ascii=False,
+        ),
+        description=(
+            "Skip and clear the current prepared post when vlm_query reports SUBJECT: NOT_CAT or the image "
+            "otherwise violates the configured topic. Pass the prepared_id and the visual-analysis reason."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "prepared_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+        },
     )
     api.register_tool(
         "subscribe",

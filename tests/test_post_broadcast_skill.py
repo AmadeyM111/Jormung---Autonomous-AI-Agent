@@ -86,6 +86,10 @@ def test_post_broadcast_prepare_next_downloads_required_image(tmp_path, monkeypa
     assert prepared["prepared"]["prepared_id"]
     assert prepared["prepared"]["source_url"] == "https://ru.pinterest.com/pin/42/"
     assert prepared["prepared"]["image_path"].endswith(".png")
+    assert prepared["prepared"]["caption_generation"]["vision_tool"] == "vlm_query"
+    assert prepared["prepared"]["caption_generation"]["required"] is True
+    assert prepared["prepared"]["caption_generation"]["required_subject"] == "cat"
+    assert prepared["prepared"]["caption_generation"]["vision_model"].startswith("groq::")
 
     records = json.loads((tmp_path / "records.json").read_text(encoding="utf-8"))
     assert records["items"][0]["status"] == "prepared"
@@ -132,7 +136,10 @@ def test_post_broadcast_send_prepared_appends_source_and_marks_sent(tmp_path, mo
     result = plugin._send_prepared(
         tmp_path,
         prepared_id="post-1",
-        caption="Intellectual cat joke",
+        caption=(
+            "Серый кот внимательно изучает край стола, будто проверяет действие гравитации "
+            "на важных документах. Эксперимент считается успешным, когда всё уже лежит на полу."
+        ),
         telegram_token="1234567890:test_token",
     )
 
@@ -196,7 +203,10 @@ def test_post_broadcast_send_prepared_skips_unsubscribed_configured_chat(tmp_pat
     result = plugin._send_prepared(
         tmp_path,
         prepared_id="post-1",
-        caption="Intellectual cat joke",
+        caption=(
+            "Белый кот устроился рядом с чашкой и смотрит прямо в камеру. "
+            "Так выглядит руководитель встречи, который уже понял: повестка снова могла быть письмом."
+        ),
         telegram_token="1234567890:test_token",
     )
 
@@ -226,7 +236,10 @@ def test_post_broadcast_send_prepared_tolerates_stale_prepared_id(tmp_path, monk
     result = plugin._send_prepared(
         tmp_path,
         prepared_id="stale",
-        caption="Cat meme",
+        caption=(
+            "Полосатый кот замер перед открытой коробкой и оценивает её вместимость. "
+            "Техническое задание принято: сначала поместиться, потом разобраться с требованиями."
+        ),
         telegram_token="1234567890:test_token",
     )
 
@@ -236,7 +249,7 @@ def test_post_broadcast_send_prepared_tolerates_stale_prepared_id(tmp_path, monk
     assert result["current_prepared_id"] == "current"
 
 
-def test_post_broadcast_send_prepared_uses_informative_fallback_caption(tmp_path, monkeypatch):
+def test_post_broadcast_send_prepared_rejects_empty_caption_and_keeps_prepared(tmp_path, monkeypatch):
     image_path = tmp_path / "images" / "post.png"
     image_path.parent.mkdir(parents=True)
     image_path.write_bytes(_PNG_BYTES)
@@ -261,8 +274,97 @@ def test_post_broadcast_send_prepared_uses_informative_fallback_caption(tmp_path
 
     result = plugin._send_prepared(tmp_path, prepared_id="current", caption="", telegram_token="1234567890:test_token")
 
+    assert result["ok"] is False
+    assert result["retryable"] is True
+    assert "caption is required" in result["error"]
+    assert sent == []
+    assert json.loads((tmp_path / "prepared.json").read_text(encoding="utf-8"))["prepared_id"] == "current"
+
+
+def test_post_broadcast_send_prepared_rejects_retired_static_caption(tmp_path, monkeypatch):
+    image_path = tmp_path / "images" / "post.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_PNG_BYTES)
+    (tmp_path / "config.json").write_text(
+        json.dumps({"telegram": {"chat_ids": ["7568942324"], "append_source_link": False}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prepared.json").write_text(
+        json.dumps({"prepared_id": "current", "image_path": str(image_path)}),
+        encoding="utf-8",
+    )
+    (tmp_path / "records.json").write_text(
+        json.dumps({"schema_version": 1, "items": [{"id": "current", "status": "prepared"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(plugin, "_telegram_send_photo", lambda *_args: {"ok": True})
+
+    result = plugin._send_prepared(
+        tmp_path,
+        prepared_id="current",
+        caption=(
+            "Hello Memes\n\nКот в кадре демонстрирует уверенность старшего инженера: лапа уже "
+            "на клавиатуре, мышь под контролем, задача почти решена. Осталось понять, кто открыл 47 вкладок."
+        ),
+        telegram_token="1234567890:test_token",
+    )
+
+    assert result["ok"] is False
+    assert "retired static template" in result["error"]
+
+
+def test_post_broadcast_send_prepared_rejects_recent_near_duplicate(tmp_path, monkeypatch):
+    image_path = tmp_path / "images" / "post.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_PNG_BYTES)
+    previous = (
+        "Рыжий кот внимательно смотрит на монитор и держит лапу на клавиатуре. "
+        "Похоже, код-ревью закончится одобрением, если в миске уже появился корм."
+    )
+    (tmp_path / "config.json").write_text(
+        json.dumps({"telegram": {"chat_ids": ["7568942324"], "append_source_link": False}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "prepared.json").write_text(
+        json.dumps({"prepared_id": "current", "image_path": str(image_path)}),
+        encoding="utf-8",
+    )
+    (tmp_path / "records.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "items": [
+                    {"id": "current", "status": "prepared"},
+                    {"id": "old", "status": "sent", "caption": previous + "\n\nSource: https://example.test"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(plugin, "_telegram_send_photo", lambda *_args: {"ok": True})
+
+    result = plugin._send_prepared(
+        tmp_path,
+        prepared_id="current",
+        caption="Новый заголовок\n\n" + previous,
+        telegram_token="1234567890:test_token",
+    )
+
+    assert result["ok"] is False
+    assert "too similar to a recent broadcast" in result["error"]
+
+
+def test_post_broadcast_skip_prepared_marks_record_and_clears_state(tmp_path):
+    (tmp_path / "prepared.json").write_text(json.dumps({"prepared_id": "dog-post"}), encoding="utf-8")
+    (tmp_path / "records.json").write_text(
+        json.dumps({"schema_version": 1, "items": [{"id": "dog-post", "status": "prepared"}]}),
+        encoding="utf-8",
+    )
+
+    result = plugin._skip_prepared(tmp_path, prepared_id="dog-post", reason="SUBJECT: NOT_CAT; dog in image")
+
     assert result["ok"] is True
-    assert sent
-    assert sent[0] != "Cat memes"
-    assert "Кот" in sent[0]
-    assert "клавиатуре" in sent[0]
+    assert json.loads((tmp_path / "prepared.json").read_text(encoding="utf-8")) == {}
+    record = json.loads((tmp_path / "records.json").read_text(encoding="utf-8"))["items"][0]
+    assert record["status"] == "skipped"
+    assert "NOT_CAT" in record["last_error"]
