@@ -247,7 +247,18 @@ def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeyp
         monkeypatch.setattr(extension_loader, "is_extension_live", old_is_live)
 
     names = [schema["function"]["name"] for schema in schemas or []]
-    assert {"read_file", "list_files", "write_file", "edit_text", "search_code", "ext_research_refresh"} <= set(names)
+    assert {
+        "read_file",
+        "list_files",
+        "write_file",
+        "edit_text",
+        "search_code",
+        "web_search",
+        "browse_page",
+        "browser_action",
+        "vlm_query",
+        "ext_research_refresh",
+    } <= set(names)
     assert "ext_other_refresh" not in names
 
 
@@ -371,6 +382,178 @@ def test_web_search_query_extraction_is_domain_agnostic():
     assert "нефти" in query
     assert "machine learning" not in query
     assert "из поисковика" not in query
+
+
+def test_article_summary_direct_route_combines_recent_telegram_messages():
+    calls = []
+    progress = []
+    messages = [
+        {"role": "user", "content": "расскажи суть статьи и ключевые инженерные решения"},
+        {
+            "role": "user",
+            "content": (
+                "https://dzen.ru/a/example?share_to=telegram\n"
+                "Экзоскелеты, строительный кран на джойстиках и ИИ"
+            ),
+        },
+    ]
+
+    class FakeTools:
+        def execute(self, name, args):
+            calls.append((name, args))
+            return (
+                "# Стройка будущего\n\nНа площадке применяют промышленные экзоскелеты, "
+                "дистанционное управление краном и компьютерное зрение для контроля безопасности. "
+                "Оператор управляет оборудованием из защищённой кабины."
+            )
+
+    trace = {"reasoning_notes": [], "tool_calls": []}
+    enriched = loop_mod._maybe_enrich_article_summary_request(
+        messages=messages,
+        tools_registry=FakeTools(),
+        llm_trace=trace,
+        emit_progress=progress.append,
+        attempted_urls=set(),
+    )
+
+    assert enriched is True
+    assert calls == [(
+        "browse_page",
+        {"url": "https://dzen.ru/a/example?share_to=telegram", "output": "markdown", "timeout": 45_000},
+    )]
+    assert progress == ["Extracting article content..."]
+    assert "[EXTERNAL_ARTICLE_CONTENT]" in messages[-1]["content"]
+    assert "untrusted source material" in messages[-1]["content"]
+    assert trace["tool_calls"][0]["status"] == "direct_article_extract"
+
+
+def test_article_summary_direct_route_records_concrete_browser_failure():
+    messages = [
+        {"role": "user", "content": "Сделай summary https://example.com/article"},
+    ]
+
+    class FakeTools:
+        def execute(self, _name, _args):
+            return "⚠️ TOOL_ERROR (browse_page): navigation timeout"
+
+    trace = {"reasoning_notes": [], "tool_calls": []}
+    enriched = loop_mod._maybe_enrich_article_summary_request(
+        messages=messages,
+        tools_registry=FakeTools(),
+        llm_trace=trace,
+        emit_progress=lambda _text: None,
+        attempted_urls=set(),
+    )
+
+    assert enriched is False
+    assert "[ARTICLE_EXTRACTION_FAILED]" in messages[-1]["content"]
+    assert "navigation timeout" in messages[-1]["content"]
+    assert trace["tool_calls"][0]["is_error"] is True
+
+
+def test_post_broadcast_scheduled_route_runs_prepare_vision_send(monkeypatch):
+    tool_names = {
+        "ext_pb_prepare_next": {"skill": "post_broadcast"},
+        "ext_pb_send_prepared": {"skill": "post_broadcast"},
+        "ext_pb_skip_prepared": {"skill": "post_broadcast"},
+    }
+    monkeypatch.setattr(
+        "ouroboros.extension_loader.get_tool",
+        lambda name: tool_names.get(name),
+    )
+    calls = []
+
+    class FakeTools:
+        _ctx = SimpleNamespace()
+
+        def execute(self, name, args):
+            calls.append((name, args))
+            if name.endswith("_prepare_next"):
+                return json.dumps({
+                    "ok": True,
+                    "has_prepared": True,
+                    "prepared": {
+                        "prepared_id": "cat-1",
+                        "image_url": "https://example.com/cat.jpg",
+                        "caption_generation": {
+                            "vision_prompt": "Classify and describe",
+                            "vision_model": "groq::vision",
+                            "min_chars": 80,
+                        },
+                    },
+                })
+            if name == "vlm_query":
+                return (
+                    "SUBJECT: CAT\n"
+                    "Подпись: Рыжий кот внимательно смотрит на кружку и явно оценивает, "
+                    "достаточно ли серьёзно человек относится к утреннему кофе и кошачьему распорядку."
+                )
+            if name.endswith("_send_prepared"):
+                return json.dumps({"ok": True, "sent_chats": 4})
+            raise AssertionError(name)
+
+    schemas = [
+        {"type": "function", "function": {"name": name}}
+        for name in tool_names
+    ]
+    trace = {"reasoning_notes": [], "tool_calls": []}
+    result = loop_mod._maybe_run_post_broadcast_direct(
+        messages=[{
+            "role": "user",
+            "content": "Run reviewed scheduled skill task `post_broadcast/cat_meme_post_broadcast`.",
+        }],
+        tools_registry=FakeTools(),
+        tool_schemas=schemas,
+        llm_trace=trace,
+        emit_progress=lambda _text: None,
+    )
+
+    assert result == "post_broadcast sent prepared post cat-1 to 4 subscriber(s)."
+    assert [name for name, _args in calls] == [
+        "ext_pb_prepare_next",
+        "vlm_query",
+        "ext_pb_send_prepared",
+    ]
+    assert len(trace["tool_calls"]) == 3
+
+
+def test_post_broadcast_scheduled_route_skips_non_cat(monkeypatch):
+    tool_names = {
+        "ext_pb_prepare_next": {"skill": "post_broadcast"},
+        "ext_pb_send_prepared": {"skill": "post_broadcast"},
+        "ext_pb_skip_prepared": {"skill": "post_broadcast"},
+    }
+    monkeypatch.setattr("ouroboros.extension_loader.get_tool", lambda name: tool_names.get(name))
+
+    class FakeTools:
+        _ctx = SimpleNamespace()
+
+        def execute(self, name, _args):
+            if name.endswith("_prepare_next"):
+                return json.dumps({
+                    "ok": True,
+                    "has_prepared": True,
+                    "prepared": {
+                        "prepared_id": "dog-1",
+                        "image_url": "https://example.com/dog.jpg",
+                        "caption_generation": {"vision_prompt": "Classify", "vision_model": "groq::vision"},
+                    },
+                })
+            if name == "vlm_query":
+                return "SUBJECT: NOT_CAT\nНа изображении собака."
+            if name.endswith("_skip_prepared"):
+                return json.dumps({"ok": True, "skipped_id": "dog-1"})
+            raise AssertionError(name)
+
+    result = loop_mod._maybe_run_post_broadcast_direct(
+        messages=[{"role": "user", "content": "post_broadcast/cat_meme_post_broadcast"}],
+        tools_registry=FakeTools(),
+        tool_schemas=[{"type": "function", "function": {"name": name}} for name in tool_names],
+        llm_trace={"reasoning_notes": [], "tool_calls": []},
+        emit_progress=lambda _text: None,
+    )
+
+    assert result == "post_broadcast skipped non-cat image dog-1."
 
 
 def test_research_digest_direct_route_requires_request_intent(monkeypatch):
