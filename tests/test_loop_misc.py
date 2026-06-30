@@ -508,7 +508,10 @@ def test_post_broadcast_scheduled_route_runs_prepare_vision_send(monkeypatch):
         emit_progress=lambda _text: None,
     )
 
-    assert result == "post_broadcast sent prepared post cat-1 to 4 subscriber(s)."
+    assert result == (
+        "post_broadcast sent prepared post cat-1 to 4 subscriber(s) "
+        "after checking 1 candidate(s)."
+    )
     assert [name for name, _args in calls] == [
         "ext_pb_prepare_next",
         "vlm_query",
@@ -517,7 +520,7 @@ def test_post_broadcast_scheduled_route_runs_prepare_vision_send(monkeypatch):
     assert len(trace["tool_calls"]) == 3
 
 
-def test_post_broadcast_scheduled_route_skips_non_cat(monkeypatch):
+def test_post_broadcast_scheduled_route_searches_until_cat(monkeypatch):
     tool_names = {
         "ext_pb_prepare_next": {"skill": "post_broadcast"},
         "ext_pb_send_prepared": {"skill": "post_broadcast"},
@@ -525,24 +528,47 @@ def test_post_broadcast_scheduled_route_skips_non_cat(monkeypatch):
     }
     monkeypatch.setattr("ouroboros.extension_loader.get_tool", lambda name: tool_names.get(name))
 
+    prepared = [
+        {
+            "prepared_id": "dog-1",
+            "image_url": "https://example.com/dog.jpg",
+            "caption_generation": {"vision_prompt": "Classify", "vision_model": "groq::vision"},
+        },
+        {
+            "prepared_id": "cat-2",
+            "image_url": "https://example.com/cat.jpg",
+            "caption_generation": {
+                "vision_prompt": "Classify",
+                "vision_model": "groq::vision",
+                "min_chars": 80,
+            },
+        },
+    ]
+    calls = []
+
     class FakeTools:
         _ctx = SimpleNamespace()
 
-        def execute(self, name, _args):
+        def execute(self, name, args):
+            calls.append((name, args))
             if name.endswith("_prepare_next"):
                 return json.dumps({
                     "ok": True,
                     "has_prepared": True,
-                    "prepared": {
-                        "prepared_id": "dog-1",
-                        "image_url": "https://example.com/dog.jpg",
-                        "caption_generation": {"vision_prompt": "Classify", "vision_model": "groq::vision"},
-                    },
+                    "prepared": prepared.pop(0),
                 })
             if name == "vlm_query":
-                return "SUBJECT: NOT_CAT\nНа изображении собака."
+                if args["image_url"].endswith("dog.jpg"):
+                    return "SUBJECT: NOT_CAT\nНа изображении собака."
+                return (
+                    "SUBJECT: CAT\n"
+                    "Подпись: Серый кот внимательно изучает клавиатуру и, судя по выражению морды, "
+                    "уже нашёл архитектурную ошибку, которую люди обсуждали весь рабочий день."
+                )
             if name.endswith("_skip_prepared"):
                 return json.dumps({"ok": True, "skipped_id": "dog-1"})
+            if name.endswith("_send_prepared"):
+                return json.dumps({"ok": True, "sent_chats": 2})
             raise AssertionError(name)
 
     result = loop_mod._maybe_run_post_broadcast_direct(
@@ -553,7 +579,74 @@ def test_post_broadcast_scheduled_route_skips_non_cat(monkeypatch):
         emit_progress=lambda _text: None,
     )
 
-    assert result == "post_broadcast skipped non-cat image dog-1."
+    assert result == (
+        "post_broadcast sent prepared post cat-2 to 2 subscriber(s) "
+        "after checking 2 candidate(s)."
+    )
+    assert [name for name, _args in calls] == [
+        "ext_pb_prepare_next",
+        "vlm_query",
+        "ext_pb_skip_prepared",
+        "ext_pb_prepare_next",
+        "vlm_query",
+        "ext_pb_send_prepared",
+    ]
+    assert calls[0][1] == {"refresh": True}
+    assert calls[3][1] == {"refresh": False}
+
+
+def test_post_broadcast_scheduled_route_reports_exhausted_source(monkeypatch):
+    tool_names = {
+        "ext_pb_prepare_next": {"skill": "post_broadcast"},
+        "ext_pb_send_prepared": {"skill": "post_broadcast"},
+        "ext_pb_skip_prepared": {"skill": "post_broadcast"},
+    }
+    monkeypatch.setattr("ouroboros.extension_loader.get_tool", lambda name: tool_names.get(name))
+    prepare_calls = 0
+
+    class FakeTools:
+        _ctx = SimpleNamespace()
+
+        def execute(self, name, _args):
+            nonlocal prepare_calls
+            if name.endswith("_prepare_next"):
+                prepare_calls += 1
+                if prepare_calls == 1:
+                    return json.dumps({
+                        "ok": True,
+                        "has_prepared": True,
+                        "prepared": {
+                            "prepared_id": "person-1",
+                            "image_url": "https://example.com/person.jpg",
+                            "caption_generation": {
+                                "vision_prompt": "Classify",
+                                "vision_model": "groq::vision",
+                            },
+                        },
+                    })
+                return json.dumps({
+                    "ok": True,
+                    "has_prepared": False,
+                    "reason": "no unsent image posts available",
+                })
+            if name == "vlm_query":
+                return "SUBJECT: NOT_CAT\nНа изображении человек."
+            if name.endswith("_skip_prepared"):
+                return json.dumps({"ok": True, "skipped_id": "person-1"})
+            raise AssertionError(name)
+
+    result = loop_mod._maybe_run_post_broadcast_direct(
+        messages=[{"role": "user", "content": "post_broadcast/cat_meme_post_broadcast"}],
+        tools_registry=FakeTools(),
+        tool_schemas=[{"type": "function", "function": {"name": name}} for name in tool_names],
+        llm_trace={"reasoning_notes": [], "tool_calls": []},
+        emit_progress=lambda _text: None,
+    )
+
+    assert result == (
+        "post_broadcast: no matching cat image found after checking "
+        "1 candidate(s); source exhausted."
+    )
 
 
 def test_research_digest_direct_route_requires_request_intent(monkeypatch):

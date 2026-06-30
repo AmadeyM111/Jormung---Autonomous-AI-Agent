@@ -420,77 +420,99 @@ def _maybe_run_post_broadcast_direct(
     if not all(tool_names.get(name) for name in ("prepare_next", "send_prepared", "skip_prepared")):
         return ""
 
-    prepare_args = {"refresh": True}
-    emit_progress("Preparing broadcast post...")
-    prepare_raw = _execute_trusted_extension(tools_registry, tool_names["prepare_next"], prepare_args)
-    try:
-        prepare = json.loads(prepare_raw)
-    except Exception:
-        prepare = {}
-    prepare_error = not isinstance(prepare, dict) or not prepare.get("ok")
-    _record_direct_tool_call(
-        llm_trace, tool_names["prepare_next"], prepare_args, prepare_raw, is_error=prepare_error
-    )
-    if prepare_error:
-        return f"⚠️ post_broadcast prepare failed: {prepare.get('error') or prepare_raw[:500]}"
-    if not prepare.get("has_prepared"):
-        return f"post_broadcast: {prepare.get('reason') or 'no post prepared'}."
-
-    prepared = prepare.get("prepared") if isinstance(prepare.get("prepared"), dict) else {}
-    generation = prepared.get("caption_generation") if isinstance(prepared.get("caption_generation"), dict) else {}
-    prepared_id = str(prepared.get("prepared_id") or "")
-    vision_args = {
-        "image_url": str(prepared.get("image_url") or ""),
-        "prompt": str(generation.get("vision_prompt") or ""),
-        "model": str(generation.get("vision_model") or ""),
-    }
-    emit_progress("Analyzing broadcast image...")
-    vision_raw = str(tools_registry.execute("vlm_query", vision_args) or "").strip()
-    vision_error = not vision_raw or vision_raw.startswith("⚠️")
-    _record_direct_tool_call(llm_trace, "vlm_query", vision_args, vision_raw, is_error=vision_error)
-    if vision_error:
-        return f"⚠️ post_broadcast vision analysis failed: {vision_raw or 'empty VLM response'}"
-
-    first_line = vision_raw.splitlines()[0].strip().upper() if vision_raw.splitlines() else ""
-    if first_line == "SUBJECT: NOT_CAT":
-        skip_args = {"prepared_id": prepared_id, "reason": vision_raw[:500]}
-        skip_raw = _execute_trusted_extension(tools_registry, tool_names["skip_prepared"], skip_args)
+    attempted_ids: set[str] = set()
+    refresh = True
+    while True:
+        prepare_args = {"refresh": refresh}
+        refresh = False
+        emit_progress("Preparing broadcast post...")
+        prepare_raw = _execute_trusted_extension(tools_registry, tool_names["prepare_next"], prepare_args)
         try:
-            skip = json.loads(skip_raw)
+            prepare = json.loads(prepare_raw)
         except Exception:
-            skip = {}
-        skip_error = not isinstance(skip, dict) or not skip.get("ok")
+            prepare = {}
+        prepare_error = not isinstance(prepare, dict) or not prepare.get("ok")
         _record_direct_tool_call(
-            llm_trace, tool_names["skip_prepared"], skip_args, skip_raw, is_error=skip_error
+            llm_trace, tool_names["prepare_next"], prepare_args, prepare_raw, is_error=prepare_error
         )
-        return (
-            f"post_broadcast skipped non-cat image {prepared_id}."
-            if not skip_error
-            else f"⚠️ post_broadcast skip failed: {skip.get('error') or skip_raw[:500]}"
-        )
-    if first_line != "SUBJECT: CAT":
-        return "⚠️ post_broadcast vision analysis did not return the required SUBJECT: CAT/NOT_CAT marker."
+        if prepare_error:
+            return f"⚠️ post_broadcast prepare failed: {prepare.get('error') or prepare_raw[:500]}"
+        if not prepare.get("has_prepared"):
+            if attempted_ids:
+                return (
+                    "post_broadcast: no matching cat image found after checking "
+                    f"{len(attempted_ids)} candidate(s); source exhausted."
+                )
+            return f"post_broadcast: {prepare.get('reason') or 'no post prepared'}."
 
-    caption = _caption_from_vision_analysis(vision_raw)
-    if len(caption) < int(generation.get("min_chars") or 80):
-        return "⚠️ post_broadcast vision caption was too short; prepared post remains queued."
-    send_args = {"prepared_id": prepared_id, "caption": caption}
-    emit_progress("Sending broadcast post...")
-    send_raw = _execute_trusted_extension(tools_registry, tool_names["send_prepared"], send_args)
-    try:
-        sent = json.loads(send_raw)
-    except Exception:
-        sent = {}
-    send_error = not isinstance(sent, dict) or not sent.get("ok")
-    _record_direct_tool_call(
-        llm_trace, tool_names["send_prepared"], send_args, send_raw, is_error=send_error
-    )
-    if send_error:
-        return f"⚠️ post_broadcast send failed: {sent.get('error') or send_raw[:500]}"
-    return (
-        f"post_broadcast sent prepared post {prepared_id} "
-        f"to {int(sent.get('sent_chats') or 0)} subscriber(s)."
-    )
+        prepared = prepare.get("prepared") if isinstance(prepare.get("prepared"), dict) else {}
+        generation = (
+            prepared.get("caption_generation")
+            if isinstance(prepared.get("caption_generation"), dict)
+            else {}
+        )
+        prepared_id = str(prepared.get("prepared_id") or "")
+        if not prepared_id:
+            return "⚠️ post_broadcast prepare returned a candidate without prepared_id."
+        if prepared_id in attempted_ids:
+            return (
+                "⚠️ post_broadcast candidate search repeated an already checked image "
+                f"{prepared_id}; stopping to avoid an infinite loop."
+            )
+        attempted_ids.add(prepared_id)
+
+        vision_args = {
+            "image_url": str(prepared.get("image_url") or ""),
+            "prompt": str(generation.get("vision_prompt") or ""),
+            "model": str(generation.get("vision_model") or ""),
+        }
+        emit_progress(f"Analyzing broadcast image {len(attempted_ids)}...")
+        vision_raw = str(tools_registry.execute("vlm_query", vision_args) or "").strip()
+        vision_error = not vision_raw or vision_raw.startswith("⚠️")
+        _record_direct_tool_call(llm_trace, "vlm_query", vision_args, vision_raw, is_error=vision_error)
+        if vision_error:
+            return f"⚠️ post_broadcast vision analysis failed: {vision_raw or 'empty VLM response'}"
+
+        first_line = vision_raw.splitlines()[0].strip().upper() if vision_raw.splitlines() else ""
+        if first_line == "SUBJECT: NOT_CAT":
+            skip_args = {"prepared_id": prepared_id, "reason": vision_raw[:500]}
+            skip_raw = _execute_trusted_extension(tools_registry, tool_names["skip_prepared"], skip_args)
+            try:
+                skip = json.loads(skip_raw)
+            except Exception:
+                skip = {}
+            skip_error = not isinstance(skip, dict) or not skip.get("ok")
+            _record_direct_tool_call(
+                llm_trace, tool_names["skip_prepared"], skip_args, skip_raw, is_error=skip_error
+            )
+            if skip_error:
+                return f"⚠️ post_broadcast skip failed: {skip.get('error') or skip_raw[:500]}"
+            emit_progress("Image does not match cat criteria; searching next candidate...")
+            continue
+        if first_line != "SUBJECT: CAT":
+            return "⚠️ post_broadcast vision analysis did not return the required SUBJECT: CAT/NOT_CAT marker."
+
+        caption = _caption_from_vision_analysis(vision_raw)
+        if len(caption) < int(generation.get("min_chars") or 80):
+            return "⚠️ post_broadcast vision caption was too short; prepared post remains queued."
+        send_args = {"prepared_id": prepared_id, "caption": caption}
+        emit_progress("Sending broadcast post...")
+        send_raw = _execute_trusted_extension(tools_registry, tool_names["send_prepared"], send_args)
+        try:
+            sent = json.loads(send_raw)
+        except Exception:
+            sent = {}
+        send_error = not isinstance(sent, dict) or not sent.get("ok")
+        _record_direct_tool_call(
+            llm_trace, tool_names["send_prepared"], send_args, send_raw, is_error=send_error
+        )
+        if send_error:
+            return f"⚠️ post_broadcast send failed: {sent.get('error') or send_raw[:500]}"
+        return (
+            f"post_broadcast sent prepared post {prepared_id} "
+            f"to {int(sent.get('sent_chats') or 0)} subscriber(s) "
+            f"after checking {len(attempted_ids)} candidate(s)."
+        )
 
 
 def _maybe_run_research_digest_direct(
