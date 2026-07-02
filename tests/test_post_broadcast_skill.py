@@ -35,6 +35,16 @@ def test_post_broadcast_parses_pinterest_board_html():
     assert items[0]["image_key"] == "pinimg:aa/bb/cat.jpg"
 
 
+def test_post_broadcast_uses_configured_vision_model():
+    generation = plugin._caption_generation_config(
+        {"rewrite": {"vision_model": "custom/vision-model", "max_caption_chars": 500}},
+        {"items": []},
+    )
+
+    assert generation["vision_model"] == "custom/vision-model"
+    assert generation["max_chars"] == 500
+
+
 def test_post_broadcast_deduplicates_pinterest_image_sizes():
     first = plugin._pinimg_image_key("https://i.pinimg.com/474x/8e/63/3e/cat.jpg")
     second = plugin._pinimg_image_key("https://i.pinimg.com/736x/8e/63/3e/cat.jpg")
@@ -89,7 +99,10 @@ def test_post_broadcast_prepare_next_downloads_required_image(tmp_path, monkeypa
     assert prepared["prepared"]["caption_generation"]["vision_tool"] == "vlm_query"
     assert prepared["prepared"]["caption_generation"]["required"] is True
     assert prepared["prepared"]["caption_generation"]["required_subject"] == "cat"
-    assert prepared["prepared"]["caption_generation"]["vision_model"].startswith("groq::")
+    assert (
+        prepared["prepared"]["caption_generation"]["vision_model"]
+        == "google/gemma-4-26b-a4b-it:free"
+    )
 
     records = json.loads((tmp_path / "records.json").read_text(encoding="utf-8"))
     assert records["items"][0]["status"] == "prepared"

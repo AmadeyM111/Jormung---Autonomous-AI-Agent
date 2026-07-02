@@ -42,7 +42,7 @@ _TELEGRAM_PHOTO_CAPTION_LIMIT = 1024
 _MIN_GENERATED_CAPTION_CHARS = 80
 _RECENT_CAPTION_LIMIT = 12
 _CAPTION_SIMILARITY_LIMIT = 0.86
-_DEFAULT_VISION_MODEL = "groq::meta-llama/llama-4-scout-17b-16e-instruct"
+_DEFAULT_VISION_MODEL = "google/gemma-4-26b-a4b-it:free"
 _REJECTED_CAPTION_PHRASES = (
     "кот в кадре демонстрирует уверенность старшего инженера",
     "кот занял рабочее место и выглядит так, будто сейчас закроет спринт",
@@ -69,6 +69,7 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
         "style": "intellectually funny Russian",
         "language": "ru",
         "max_caption_chars": 700,
+        "vision_model": _DEFAULT_VISION_MODEL,
     },
     "moderation": {
         "mode": "automatic",
@@ -595,6 +596,7 @@ def _candidate_items(records: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
 
 
 def _caption_generation_config(config: Dict[str, Any], records: Dict[str, Any]) -> Dict[str, Any]:
+    rewrite = config.get("rewrite") if isinstance(config.get("rewrite"), dict) else {}
     recent_captions = [
         str(record.get("caption") or "").strip()[:500]
         for record in records.get("items", [])
@@ -604,7 +606,7 @@ def _caption_generation_config(config: Dict[str, Any], records: Dict[str, Any]) 
         "required": True,
         "required_subject": "cat",
         "vision_tool": "vlm_query",
-        "vision_model": _DEFAULT_VISION_MODEL,
+        "vision_model": str(rewrite.get("vision_model") or _DEFAULT_VISION_MODEL),
         "vision_prompt": (
             "Сначала напиши ровно SUBJECT: CAT, если на изображении виден кот или кошка, либо "
             "SUBJECT: NOT_CAT, если кошки нет. Затем опиши только то, что действительно видно: "
@@ -613,7 +615,7 @@ def _caption_generation_config(config: Dict[str, Any], records: Dict[str, Any]) 
             "прежние подписи и не используй заголовок источника как заголовок поста."
         ),
         "min_chars": _MIN_GENERATED_CAPTION_CHARS,
-        "max_chars": int((config.get("rewrite") or {}).get("max_caption_chars") or 700),
+        "max_chars": int(rewrite.get("max_caption_chars") or 700),
         "recent_captions_to_avoid": recent_captions,
     }
 

@@ -697,6 +697,53 @@ def test_trusted_research_digest_direct_dispatch_skips_llm_safety(monkeypatch):
     assert json.loads(result)["final_response"] == "digest ready"
 
 
+def test_trusted_post_broadcast_direct_dispatch_skips_llm_safety(monkeypatch):
+    from ouroboros.tools.extension_dispatch import dispatch_extension_tool
+
+    def fail_safety(*_args, **_kwargs):
+        raise AssertionError("safety LLM check should not run for trusted post_broadcast workflow")
+
+    monkeypatch.setattr("ouroboros.safety.check_safety", fail_safety)
+    monkeypatch.setattr("ouroboros.extension_loader.is_extension_live", lambda *_args, **_kwargs: True)
+
+    tool_name = "ext_16_r_post_broadcast_prepare_next"
+    ctx = SimpleNamespace(
+        _trusted_direct_extension_tool=tool_name,
+        task_metadata={},
+        drive_root="/tmp/drive",
+        messages=[{"role": "user", "content": "подготовь рассылку"}],
+    )
+    ext_tool = {
+        "skill": "post_broadcast",
+        "handler": lambda _ctx, **_kwargs: json.dumps({"ok": True, "has_prepared": False}),
+    }
+
+    result = dispatch_extension_tool(ctx, tool_name, ext_tool, {"refresh": True})
+
+    assert json.loads(result) == {"ok": True, "has_prepared": False}
+
+
+def test_untrusted_post_broadcast_dispatch_keeps_llm_safety(monkeypatch):
+    from ouroboros.tools.extension_dispatch import dispatch_extension_tool
+
+    safety_calls = []
+    monkeypatch.setattr(
+        "ouroboros.safety.check_safety",
+        lambda *args, **kwargs: safety_calls.append((args, kwargs)) or (False, "blocked"),
+    )
+    monkeypatch.setattr("ouroboros.extension_loader.is_extension_live", lambda *_args, **_kwargs: True)
+
+    result = dispatch_extension_tool(
+        SimpleNamespace(task_metadata={}, drive_root="/tmp/drive", messages=[]),
+        "ext_16_r_post_broadcast_prepare_next",
+        {"skill": "post_broadcast", "handler": lambda _ctx, **_kwargs: "must not run"},
+        {"refresh": True},
+    )
+
+    assert result == "blocked"
+    assert len(safety_calls) == 1
+
+
 def test_maybe_inject_self_check_handles_assistant_none_content():
     messages = [
         {"role": "user", "content": "inspect"},

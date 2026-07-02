@@ -36,11 +36,19 @@ def dispatch_extension_tool(ctx: Any, name: str, ext_tool: Dict[str, Any], args:
         return f"⚠️ TOOL_ERROR ({name}): extension {skill_name!r} is not allowed to dispatch right now."
 
     trusted_direct_call = str(getattr(ctx, "_trusted_direct_extension_tool", "") or "")
+    trusted_post_broadcast = (
+        skill_name == "post_broadcast"
+        and any(
+            name.endswith(f"_{operation}")
+            for operation in ("prepare_next", "send_prepared", "skip_prepared")
+        )
+    )
     skip_llm_safety = (
         trusted_direct_call == name
         and (
             (skill_name == "research_digest" and name.endswith("_prepare_digest"))
             or (skill_name == "duckduckgo" and name.endswith("_search"))
+            or trusted_post_broadcast
         )
     )
     if skip_llm_safety:
