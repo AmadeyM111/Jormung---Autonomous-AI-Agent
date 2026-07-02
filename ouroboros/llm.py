@@ -421,6 +421,19 @@ class LLMClient:
             candidates.append(minimum)
         if is_tpm_overage:
             candidates.extend((64, 32, 16))
+        else:
+            affordable_match = re.search(
+                r"\bcan only afford\s+([\d,]+)\b",
+                str(exc),
+                flags=re.IGNORECASE,
+            )
+            if affordable_match:
+                try:
+                    affordable = int(affordable_match.group(1).replace(",", ""))
+                except ValueError:
+                    affordable = 0
+                if 0 < affordable < current:
+                    candidates.append(affordable)
         seen: set[int] = set()
         retries: List[Dict[str, Any]] = []
         for next_budget in candidates:

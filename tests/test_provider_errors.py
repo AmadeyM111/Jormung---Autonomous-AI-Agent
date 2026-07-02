@@ -123,6 +123,64 @@ def test_async_transport_shrinks_budget_error_to_minimum():
     assert calls == [8192, 4096, 2048, 1024, 512]
 
 
+def test_sync_transport_retries_provider_reported_affordable_budget_below_minimum():
+    from ouroboros.llm import LLMClient
+
+    client = LLMClient()
+    calls = []
+
+    class _Resp:
+        def model_dump(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    def fake_create(**kwargs):
+        calls.append(kwargs["max_tokens"])
+        if kwargs["max_tokens"] > 463:
+            raise RuntimeError(
+                "Error code: 402 - You requested up to 512 tokens, but can only afford 463."
+            )
+        return _Resp()
+
+    response = client._create_chat_completion_with_retries(
+        fake_create,
+        {"model": "qwen/test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 512},
+        client._resolve_remote_target("qwen/test"),
+    )
+
+    assert response.model_dump()["choices"][0]["message"]["content"] == "ok"
+    assert calls == [512, 463]
+
+
+def test_async_transport_retries_provider_reported_affordable_budget_below_minimum():
+    from ouroboros.llm import LLMClient
+
+    client = LLMClient()
+    calls = []
+
+    class _Resp:
+        def model_dump(self):
+            return {"choices": [{"message": {"content": "ok"}}], "usage": {}}
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs["max_tokens"])
+        if kwargs["max_tokens"] > 463:
+            raise RuntimeError(
+                "Error code: 402 - You requested up to 512 tokens, but can only afford 463."
+            )
+        return _Resp()
+
+    response = asyncio.run(
+        client._create_chat_completion_with_retries_async(
+            fake_create,
+            {"model": "qwen/test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 512},
+            client._resolve_remote_target("qwen/test"),
+        )
+    )
+
+    assert response.model_dump()["choices"][0]["message"]["content"] == "ok"
+    assert calls == [512, 463]
+
+
 def test_shrinking_stops_if_error_changes_to_authentication():
     from ouroboros.llm import LLMClient
 
