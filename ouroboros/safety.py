@@ -510,23 +510,45 @@ def _run_llm_check(
     client = LLMClient()
 
     light_model = get_light_model()
+    safety_models = [light_model]
+    fallback_model = str(os.environ.get("OUROBOROS_MODEL_FALLBACK", "") or "").strip()
+    if (
+        not _use_local_light
+        and fallback_model
+        and fallback_model != light_model
+        and _light_model_has_reachable_provider(fallback_model)
+    ):
+        safety_models.append(fallback_model)
     log.info(f"Running safety check on {tool_name} using {light_model} (local={_use_local_light})")
 
     try:
         from ouroboros.llm_observability import chat_observed
 
-        msg, usage = chat_observed(
-            client,
-            drive_root=pathlib.Path(getattr(ctx, "drive_root", "../data")) if ctx is not None else pathlib.Path("../data"),
-            task_id=str(getattr(ctx, "task_id", "") or "safety"),
-            call_type="safety_supervisor",
-            messages=[
-                {"role": "system", "content": _get_safety_prompt()},
-                {"role": "user", "content": prompt},
-            ],
-            model=light_model,
-            use_local=_use_local_light,
-        )
+        for model_index, safety_model in enumerate(safety_models):
+            try:
+                msg, usage = chat_observed(
+                    client,
+                    drive_root=pathlib.Path(getattr(ctx, "drive_root", "../data")) if ctx is not None else pathlib.Path("../data"),
+                    task_id=str(getattr(ctx, "task_id", "") or "safety"),
+                    call_type="safety_supervisor",
+                    messages=[
+                        {"role": "system", "content": _get_safety_prompt()},
+                        {"role": "user", "content": prompt},
+                    ],
+                    model=safety_model,
+                    use_local=_use_local_light,
+                )
+                light_model = safety_model
+                break
+            except Exception:
+                if model_index + 1 >= len(safety_models):
+                    raise
+                log.warning(
+                    "Safety model %s failed for %s; retrying with fallback %s",
+                    safety_model,
+                    tool_name,
+                    safety_models[model_index + 1],
+                )
     except Exception as e:
         from ouroboros.utils import sanitize_tool_result_for_log
 

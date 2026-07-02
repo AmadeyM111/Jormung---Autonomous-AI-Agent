@@ -207,6 +207,39 @@ def test_llm_api_failure_blocks(monkeypatch):
     assert "network down" in msg
 
 
+def test_remote_safety_failure_uses_configured_fallback(monkeypatch):
+    """An unavailable remote light model must not bypass the configured slave."""
+    from ouroboros.safety import check_safety
+    import ouroboros.safety as safety
+
+    monkeypatch.setenv("GIGACHAT_CREDENTIALS", "fake-gigachat")
+    monkeypatch.setenv("QWEN_API_KEY", "fake-qwen")
+    monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", "gigachat::GigaChat-2-Max")
+    monkeypatch.setenv("OUROBOROS_MODEL_FALLBACK", "qwen/qwen3.6-flash")
+
+    class _FallbackClient:
+        def __init__(self):
+            self.calls = []
+
+        def chat(self, *, messages, model, use_local):
+            self.calls.append({"messages": messages, "model": model, "use_local": use_local})
+            if model.startswith("gigachat::"):
+                raise RuntimeError("No such model")
+            return {"content": '{"status":"SAFE","reason":"ok"}'}, {}
+
+    stub = _FallbackClient()
+    monkeypatch.setattr(safety, "LLMClient", lambda: stub)
+
+    ok, msg = check_safety("create_github_issue", {"title": "x"})
+
+    assert ok is True
+    assert msg == ""
+    assert [call["model"] for call in stub.calls] == [
+        "gigachat::GigaChat-2-Max",
+        "qwen/qwen3.6-flash",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Coverage invariant
 # ---------------------------------------------------------------------------
