@@ -102,6 +102,8 @@ def test_policy_check_calls_llm(monkeypatch):
     [
         ("poolside/laguna-xs.2:free", "LAGUNA_API_KEY"),
         ("google/gemma-4-26b-a4b-it:free", "GEMMA_API_KEY"),
+        ("google/gemma-4-31b-it:free", "GEMA_API_KEY"),
+        ("nvidia/nemotron-3-nano-30b-a3b:free", "NEMOTRON_API_KEY"),
     ],
 )
 def test_model_scoped_openrouter_key_enables_safety_backend(monkeypatch, model, key_name):

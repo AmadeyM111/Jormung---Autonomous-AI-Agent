@@ -127,6 +127,60 @@ class TestLLMVisionQuery(unittest.TestCase):
         self.assertTrue(captured["no_proxy"])
         self.assertEqual(captured["timeout"], 75.0)
 
+    def test_vision_query_uses_configured_fallback_chain(self):
+        from ouroboros.llm import LLMClient
+
+        client = LLMClient(api_key="test-key")
+        calls = []
+
+        def mock_chat(**kwargs):
+            calls.append(kwargs["model"])
+            if kwargs["model"] == "vision-primary":
+                raise RuntimeError("primary unavailable")
+            return {"content": "fallback result"}, {"provider": "test"}
+
+        client.chat = mock_chat
+        with patch.dict(
+            os.environ,
+            {"OUROBOROS_VLM_FALLBACK_MODELS": "vision-backup,vision-reserve"},
+        ):
+            text, usage = client.vision_query(
+                prompt="Describe this.",
+                images=[{"url": "https://example.com/image.png"}],
+                model="vision-primary",
+            )
+
+        self.assertEqual(text, "fallback result")
+        self.assertEqual(usage["provider"], "test")
+        self.assertEqual(calls, ["vision-primary", "vision-backup"])
+
+    def test_vision_query_retries_empty_content(self):
+        from ouroboros.llm import LLMClient
+
+        client = LLMClient(api_key="test-key")
+        calls = []
+
+        def mock_chat(**kwargs):
+            calls.append(kwargs["model"])
+            return (
+                {"content": "" if kwargs["model"] == "vision-primary" else "reserve result"},
+                {},
+            )
+
+        client.chat = mock_chat
+        with patch.dict(
+            os.environ,
+            {"OUROBOROS_VLM_FALLBACK_MODELS": "vision-backup"},
+        ):
+            text, _ = client.vision_query(
+                prompt="Describe this.",
+                images=[{"url": "https://example.com/image.png"}],
+                model="vision-primary",
+            )
+
+        self.assertEqual(text, "reserve result")
+        self.assertEqual(calls, ["vision-primary", "vision-backup"])
+
 
     def test_downscale_image_enforces_provider_byte_cap(self):
         from PIL import Image

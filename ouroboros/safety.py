@@ -381,6 +381,8 @@ _REMOTE_PROVIDER_KEYS = (
     "OPENROUTER_API_KEY",
     "LAGUNA_API_KEY",
     "GEMMA_API_KEY",
+    "GEMA_API_KEY",
+    "NEMOTRON_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_COMPATIBLE_API_KEY",
@@ -431,7 +433,13 @@ def _light_model_has_reachable_provider(light_model: str) -> bool:
     ).strip():
         return True
     if light_model.startswith("google/gemma-") and str(
-        os.environ.get("GEMMA_API_KEY", "") or ""
+        os.environ.get("GEMMA_API_KEY", "")
+        or os.environ.get("GEMA_API_KEY", "")
+        or ""
+    ).strip():
+        return True
+    if light_model.startswith("nvidia/nemotron") and str(
+        os.environ.get("NEMOTRON_API_KEY", "") or ""
     ).strip():
         return True
     try:

@@ -620,9 +620,21 @@ class LLMClient:
                     os.environ.get("LAGUNA_API_KEY", "")
                     or os.environ.get("OPENROUTER_API_KEY", "")
                 )
+            elif resolved_model.startswith("google/gemma-4-31b"):
+                current_api_key = (
+                    os.environ.get("GEMA_API_KEY", "")
+                    or os.environ.get("GEMMA_API_KEY", "")
+                    or os.environ.get("OPENROUTER_API_KEY", "")
+                )
             elif resolved_model.startswith("google/gemma-"):
                 current_api_key = (
                     os.environ.get("GEMMA_API_KEY", "")
+                    or os.environ.get("GEMA_API_KEY", "")
+                    or os.environ.get("OPENROUTER_API_KEY", "")
+                )
+            elif resolved_model.startswith("nvidia/nemotron"):
+                current_api_key = (
+                    os.environ.get("NEMOTRON_API_KEY", "")
                     or os.environ.get("OPENROUTER_API_KEY", "")
                 )
             else:
@@ -2478,17 +2490,51 @@ class LLMClient:
                 log.warning("vision_query: skipping image with unknown format: %s", list(img.keys()))
 
         messages = [{"role": "user", "content": content}]
-        response_msg, usage = self.chat(
-            messages=messages,
-            model=model,
-            tools=None,
-            reasoning_effort=reasoning_effort,
-            max_tokens=max_tokens,
-            no_proxy=True,
-            timeout=timeout,
-        )
-        text = response_msg.get("content") or ""
-        return text, usage
+        raw_fallbacks = str(os.environ.get("OUROBOROS_VLM_FALLBACK_MODELS", "") or "")
+        candidates: List[str] = []
+        seen: Set[str] = set()
+        for candidate in [model, *raw_fallbacks.split(",")]:
+            normalized = str(candidate or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            candidates.append(normalized)
+
+        last_error: Optional[Exception] = None
+        last_usage: Dict[str, Any] = {}
+        for index, candidate in enumerate(candidates):
+            try:
+                response_msg, usage = self.chat(
+                    messages=messages,
+                    model=candidate,
+                    tools=None,
+                    reasoning_effort=reasoning_effort,
+                    max_tokens=max_tokens,
+                    no_proxy=True,
+                    timeout=timeout,
+                )
+                last_usage = usage
+                text = response_msg.get("content") or ""
+                if text.strip() or index + 1 >= len(candidates):
+                    return text, usage
+                log.warning(
+                    "VLM model %s returned empty content; retrying with %s",
+                    candidate,
+                    candidates[index + 1],
+                )
+            except Exception as exc:
+                last_error = exc
+                if index + 1 >= len(candidates):
+                    raise
+                log.warning(
+                    "VLM model %s failed; retrying with %s: %s",
+                    candidate,
+                    candidates[index + 1],
+                    exc,
+                )
+        if last_error is not None:
+            raise last_error
+        return "", last_usage
 
     def default_model(self) -> str:
         """Return the single default model from env. LLM switches via tool if needed."""

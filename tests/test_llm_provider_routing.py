@@ -942,10 +942,31 @@ def test_gemma_target_prefers_gemma_api_key(monkeypatch):
     assert target["api_key"] == "gemma-key"
 
 
+def test_gemma_31b_target_prefers_gema_api_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("GEMMA_API_KEY", "gemma-key")
+    monkeypatch.setenv("GEMA_API_KEY", "gema-key")
+
+    target = LLMClient()._resolve_remote_target("google/gemma-4-31b-it:free")
+
+    assert target["api_key"] == "gema-key"
+
+
+def test_nemotron_target_prefers_nemotron_api_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("NEMOTRON_API_KEY", "nemotron-key")
+
+    target = LLMClient()._resolve_remote_target("nvidia/nemotron-3-nano-30b-a3b:free")
+
+    assert target["api_key"] == "nemotron-key"
+
+
 def test_other_openrouter_target_ignores_model_scoped_api_keys(monkeypatch):
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
     monkeypatch.setenv("LAGUNA_API_KEY", "laguna-key")
     monkeypatch.setenv("GEMMA_API_KEY", "gemma-key")
+    monkeypatch.setenv("GEMA_API_KEY", "gema-key")
+    monkeypatch.setenv("NEMOTRON_API_KEY", "nemotron-key")
 
     target = LLMClient()._resolve_remote_target("qwen/qwen3.6-flash")
 
