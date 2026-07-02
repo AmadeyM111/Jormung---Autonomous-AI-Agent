@@ -379,6 +379,8 @@ def _parse_safety_response(text: str) -> Optional[Dict[str, Any]]:
 
 _REMOTE_PROVIDER_KEYS = (
     "OPENROUTER_API_KEY",
+    "LAGUNA_API_KEY",
+    "GEMMA_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_COMPATIBLE_API_KEY",
@@ -424,6 +426,14 @@ def _any_local_routing_enabled() -> bool:
 
 def _light_model_has_reachable_provider(light_model: str) -> bool:
     """Return whether the light model's direct provider config is reachable."""
+    if light_model.startswith("poolside/") and str(
+        os.environ.get("LAGUNA_API_KEY", "") or ""
+    ).strip():
+        return True
+    if light_model.startswith("google/gemma-") and str(
+        os.environ.get("GEMMA_API_KEY", "") or ""
+    ).strip():
+        return True
     try:
         from ouroboros.pricing import infer_api_key_type
         key_type = infer_api_key_type(light_model)

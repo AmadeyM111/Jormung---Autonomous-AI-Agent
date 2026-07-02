@@ -97,6 +97,29 @@ def test_policy_check_calls_llm(monkeypatch):
     assert len(stub.calls) == 1
 
 
+@pytest.mark.parametrize(
+    ("model", "key_name"),
+    [
+        ("poolside/laguna-xs.2:free", "LAGUNA_API_KEY"),
+        ("google/gemma-4-26b-a4b-it:free", "GEMMA_API_KEY"),
+    ],
+)
+def test_model_scoped_openrouter_key_enables_safety_backend(monkeypatch, model, key_name):
+    from ouroboros.safety import check_safety
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv(key_name, "model-scoped-key")
+    monkeypatch.setenv("OUROBOROS_MODEL_LIGHT", model)
+    stub = _StubLLMClient('{"status":"SAFE","reason":"ok"}')
+    _patch_llm_client(monkeypatch, stub)
+
+    ok, msg = check_safety("comment_on_pr", {"pr_number": 1, "body": "hi"})
+
+    assert ok is True
+    assert msg == ""
+    assert stub.calls[0]["model"] == model
+
+
 def test_unknown_tool_defaults_to_check(monkeypatch):
     """A tool name not present in TOOL_POLICY must fall through to a LLM check."""
     from ouroboros.safety import check_safety

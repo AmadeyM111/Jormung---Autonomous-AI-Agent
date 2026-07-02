@@ -921,6 +921,37 @@ def test_bare_qwen_target_stays_on_openrouter(monkeypatch):
     assert target["api_key"] == "openrouter-key"
 
 
+def test_poolside_target_prefers_laguna_api_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("LAGUNA_API_KEY", "laguna-key")
+
+    target = LLMClient()._resolve_remote_target("poolside/laguna-xs.2:free")
+
+    assert target["provider"] == "openrouter"
+    assert target["resolved_model"] == "poolside/laguna-xs.2:free"
+    assert target["api_key"] == "laguna-key"
+
+
+def test_gemma_target_prefers_gemma_api_key(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("LAGUNA_API_KEY", "laguna-key")
+    monkeypatch.setenv("GEMMA_API_KEY", "gemma-key")
+
+    target = LLMClient()._resolve_remote_target("google/gemma-4-26b-a4b-it:free")
+
+    assert target["api_key"] == "gemma-key"
+
+
+def test_other_openrouter_target_ignores_model_scoped_api_keys(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("LAGUNA_API_KEY", "laguna-key")
+    monkeypatch.setenv("GEMMA_API_KEY", "gemma-key")
+
+    target = LLMClient()._resolve_remote_target("qwen/qwen3.6-flash")
+
+    assert target["api_key"] == "openrouter-key"
+
+
 def test_groq_direct_provider_caps_default_max_tokens(monkeypatch):
     monkeypatch.delenv("GROQ_MAX_TOKENS", raising=False)
 

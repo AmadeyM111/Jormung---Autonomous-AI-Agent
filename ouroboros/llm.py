@@ -615,7 +615,18 @@ class LLMClient:
 
         current_api_key = self._api_key_override
         if current_api_key is None:
-            current_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            if resolved_model.startswith("poolside/"):
+                current_api_key = (
+                    os.environ.get("LAGUNA_API_KEY", "")
+                    or os.environ.get("OPENROUTER_API_KEY", "")
+                )
+            elif resolved_model.startswith("google/gemma-"):
+                current_api_key = (
+                    os.environ.get("GEMMA_API_KEY", "")
+                    or os.environ.get("OPENROUTER_API_KEY", "")
+                )
+            else:
+                current_api_key = os.environ.get("OPENROUTER_API_KEY", "")
         return {
             "provider": "openrouter",
             "resolved_model": resolved_model,
