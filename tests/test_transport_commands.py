@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+
 class Bridge:
     def __init__(self, messages):
         self._messages = list(messages)
@@ -20,6 +23,119 @@ class Ctx:
         self.state = dict(state)
     def send_with_budget(self, chat_id, text, **_kwargs):
         self.sent.append((chat_id, text))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "хочу получать котомемы",
+        "Подпишите меня на мемы с котами",
+        "Присылайте кошачьи мемы",
+        "/cats_subscribe",
+    ],
+)
+def test_cat_meme_subscribe_intents(text):
+    import server
+
+    assert server._cat_meme_subscription_action(text) == "subscribe"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "не хочу получать котомемы",
+        "Перестань присылать мемы про котов",
+        "Отпиши меня от кошачьих мемов",
+        "/cats_unsubscribe",
+    ],
+)
+def test_cat_meme_unsubscribe_intents(text):
+    import server
+
+    assert server._cat_meme_subscription_action(text) == "unsubscribe"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "люблю котомемы",
+        "хочу получать новости",
+        "покажи одного кота",
+    ],
+)
+def test_cat_meme_non_action_messages_do_not_change_subscription(text):
+    import server
+
+    assert server._cat_meme_subscription_action(text) is None
+
+
+def test_external_user_subscribes_with_sender_chat_id_without_becoming_owner(monkeypatch):
+    import server
+    import supervisor.message_bus as message_bus
+
+    calls = []
+    bridge = Bridge([{
+        "chat": {"id": 4242},
+        "from": {"id": 77},
+        "text": "хочу получать котомемы",
+        "source": "skill:telegram-bridge",
+    }])
+    ctx = Ctx({})
+    monkeypatch.setattr(message_bus, "log_chat", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        server,
+        "_apply_post_broadcast_subscription",
+        lambda _ctx, chat_id, action: calls.append((chat_id, action)) or (True, ""),
+    )
+
+    server._process_bridge_updates(bridge, 0, ctx)
+
+    assert calls == [(4242, "subscribe")]
+    assert "owner_id" not in ctx.state
+    assert "owner_chat_id" not in ctx.state
+    assert ctx.sent == [(
+        4242,
+        "✅ Вы подписаны на рассылку котомемов. Чтобы отписаться, напишите: "
+        "«не хочу получать котомемы».",
+    )]
+
+
+def test_subscription_helper_uses_sender_chat_id_and_restores_trust(monkeypatch):
+    import json
+    import server
+    import ouroboros.extension_loader as extension_loader
+
+    tool_ctx = type("ToolCtx", (), {})()
+    calls = []
+
+    class Tools:
+        _ctx = tool_ctx
+
+        def execute(self, name, args):
+            calls.append((
+                name,
+                args,
+                getattr(self._ctx, "_trusted_direct_extension_tool", ""),
+            ))
+            return json.dumps({"ok": True})
+
+    class SubscriptionCtx:
+        def get_chat_agent(self):
+            return type("Agent", (), {"tools": Tools()})()
+
+    tool_name = "ext_16_r_post_broadcast_unsubscribe"
+    monkeypatch.setattr(extension_loader, "snapshot", lambda: {"tools": [tool_name]})
+
+    result = server._apply_post_broadcast_subscription(
+        SubscriptionCtx(),
+        4242,
+        "unsubscribe",
+    )
+
+    assert result == (True, "")
+    assert calls == [(tool_name, {"chat_id": "4242"}, tool_name)]
+    assert not hasattr(tool_ctx, "_trusted_direct_extension_tool")
+
 
 def test_external_first_slash_binds_external_owner_without_executing(monkeypatch):
     import server

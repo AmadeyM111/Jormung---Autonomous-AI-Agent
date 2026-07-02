@@ -40,7 +40,13 @@ def dispatch_extension_tool(ctx: Any, name: str, ext_tool: Dict[str, Any], args:
         skill_name == "post_broadcast"
         and any(
             name.endswith(f"_{operation}")
-            for operation in ("prepare_next", "send_prepared", "skip_prepared")
+            for operation in (
+                "prepare_next",
+                "send_prepared",
+                "skip_prepared",
+                "subscribe",
+                "unsubscribe",
+            )
         )
     )
     skip_llm_safety = (

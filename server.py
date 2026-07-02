@@ -6,6 +6,7 @@ import logging
 
 import os
 import pathlib
+import re
 import sys
 import threading
 import time
@@ -230,9 +231,14 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
         is_slash_command = lowered.startswith("/")
         is_external_transport = source != "web"
         external_identity_present = (not is_external_transport) or (chat_id > 0 and user_id > 0)
+        subscription_action = (
+            _cat_meme_subscription_action(text)
+            if is_external_transport and external_identity_present
+            else None
+        )
         # Global owner = primary chat for outbound notices (web on desktop, the
         # first transport on headless Colab). Bound once, on the first message.
-        if owner_id is None and external_identity_present:
+        if owner_id is None and external_identity_present and subscription_action is None:
             st["owner_id"] = user_id
             st["owner_chat_id"] = chat_id
             owner_id = user_id
@@ -272,6 +278,27 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
         ctx.save_state(st)
 
         if not text and not image_base64:
+            continue
+
+        if subscription_action is not None:
+            ok, detail = _apply_post_broadcast_subscription(ctx, chat_id, subscription_action)
+            if ok and subscription_action == "subscribe":
+                ctx.send_with_budget(
+                    chat_id,
+                    "✅ Вы подписаны на рассылку котомемов. Чтобы отписаться, напишите: "
+                    "«не хочу получать котомемы».",
+                )
+            elif ok:
+                ctx.send_with_budget(
+                    chat_id,
+                    "✅ Вы отписаны от рассылки котомемов. Подписаться снова можно сообщением: "
+                    "«хочу получать котомемы».",
+                )
+            else:
+                ctx.send_with_budget(
+                    chat_id,
+                    f"⚠️ Не удалось изменить подписку на котомемы: {detail}",
+                )
             continue
 
         if is_external_transport and is_slash_command:
@@ -460,6 +487,87 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
                     daemon=True,
                 ).start()
     return offset
+
+
+_CAT_MEME_TOPIC_RE = re.compile(
+    r"(?:кото\s*мем\w*|кошачь\w*\s+мем\w*|мем\w*\s+(?:с|про)\s+кот\w*)",
+    flags=re.IGNORECASE,
+)
+_CAT_MEME_UNSUBSCRIBE_RE = re.compile(
+    r"(?:не\s+хочу|больше\s+не\s+хочу|не\s+присылай|перестань\s+присылать|"
+    r"отпиши(?:те)?(?:\s+меня)?|отписаться|отписываюсь)",
+    flags=re.IGNORECASE,
+)
+_CAT_MEME_SUBSCRIBE_RE = re.compile(
+    r"(?:хочу\s+(?:получать|смотреть|видеть)|присылай(?:те)?|отправляй(?:те)?|"
+    r"подпиши(?:те)?(?:\s+меня)?|подписаться|подписываюсь)",
+    flags=re.IGNORECASE,
+)
+
+
+def _cat_meme_subscription_action(text: str) -> Optional[str]:
+    """Recognize narrow Telegram self-service subscribe/unsubscribe intents."""
+    normalized = " ".join(str(text or "").lower().replace("ё", "е").split())
+    if normalized in {"/cats_unsubscribe", "/catmemes_unsubscribe"}:
+        return "unsubscribe"
+    if normalized in {"/cats_subscribe", "/catmemes_subscribe"}:
+        return "subscribe"
+    if not _CAT_MEME_TOPIC_RE.search(normalized):
+        return None
+    if _CAT_MEME_UNSUBSCRIBE_RE.search(normalized):
+        return "unsubscribe"
+    if _CAT_MEME_SUBSCRIBE_RE.search(normalized):
+        return "subscribe"
+    return None
+
+
+def _apply_post_broadcast_subscription(ctx: Any, chat_id: int, action: str) -> tuple[bool, str]:
+    """Invoke the reviewed post_broadcast subscription tool for the sender chat."""
+    from ouroboros.extension_loader import snapshot
+
+    operation = "subscribe" if action == "subscribe" else "unsubscribe"
+    suffix = f"_post_broadcast_{operation}"
+    tool_name = next(
+        (name for name in snapshot().get("tools", []) if str(name).endswith(suffix)),
+        "",
+    )
+    if not tool_name:
+        return False, "сервис рассылки сейчас недоступен"
+
+    try:
+        agent = ctx.get_chat_agent()
+        tools = agent.tools
+        tool_ctx = getattr(tools, "_ctx", None)
+        sentinel = object()
+        previous = (
+            getattr(tool_ctx, "_trusted_direct_extension_tool", sentinel)
+            if tool_ctx is not None
+            else sentinel
+        )
+        try:
+            if tool_ctx is not None:
+                setattr(tool_ctx, "_trusted_direct_extension_tool", tool_name)
+            raw = str(tools.execute(tool_name, {"chat_id": str(chat_id)}) or "")
+        finally:
+            if tool_ctx is not None:
+                if previous is sentinel:
+                    try:
+                        delattr(tool_ctx, "_trusted_direct_extension_tool")
+                    except AttributeError:
+                        pass
+                else:
+                    setattr(tool_ctx, "_trusted_direct_extension_tool", previous)
+    except Exception:
+        log.warning("Telegram cat-meme subscription tool failed", exc_info=True)
+        return False, "внутренняя ошибка сервиса"
+
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        payload = {}
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return False, str(payload.get("error") or raw[:300] or "неизвестная ошибка")
+    return True, ""
 
 
 def _runtime_branch_defaults() -> tuple[str, str]:

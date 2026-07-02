@@ -723,6 +723,32 @@ def test_trusted_post_broadcast_direct_dispatch_skips_llm_safety(monkeypatch):
     assert json.loads(result) == {"ok": True, "has_prepared": False}
 
 
+def test_trusted_post_broadcast_subscription_skips_llm_safety(monkeypatch):
+    from ouroboros.tools.extension_dispatch import dispatch_extension_tool
+
+    def fail_safety(*_args, **_kwargs):
+        raise AssertionError("safety LLM check should not run for sender-bound subscription")
+
+    monkeypatch.setattr("ouroboros.safety.check_safety", fail_safety)
+    monkeypatch.setattr("ouroboros.extension_loader.is_extension_live", lambda *_args, **_kwargs: True)
+
+    tool_name = "ext_16_r_post_broadcast_subscribe"
+    ctx = SimpleNamespace(
+        _trusted_direct_extension_tool=tool_name,
+        task_metadata={},
+        drive_root="/tmp/drive",
+        messages=[],
+    )
+    ext_tool = {
+        "skill": "post_broadcast",
+        "handler": lambda _ctx, **kwargs: json.dumps({"ok": True, **kwargs}),
+    }
+
+    result = dispatch_extension_tool(ctx, tool_name, ext_tool, {"chat_id": "4242"})
+
+    assert json.loads(result) == {"ok": True, "chat_id": "4242"}
+
+
 def test_untrusted_post_broadcast_dispatch_keeps_llm_safety(monkeypatch):
     from ouroboros.tools.extension_dispatch import dispatch_extension_tool
 
