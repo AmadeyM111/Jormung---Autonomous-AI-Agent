@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 
 MARKER = "OUROBOROS_TELEGRAM_SUBSCRIPTION_MENU"
+MAX_REVIEW_FILE_BYTES = 65_536
 
 
 def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
@@ -22,13 +23,10 @@ def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
     helper = f'''
 # {MARKER}
 def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
-    return (
-        "Управление подписками",
-        [
-            [{{"text": "Подписаться на котомемы", "callback_data": "subscription:cats:on"}}],
-            [{{"text": "Отписаться от котомемов", "callback_data": "subscription:cats:off"}}],
-        ],
-    )
+    return "Управление подписками", [
+        [{{"text": "Подписаться на котомемы", "callback_data": "sub:cats:on"}}],
+        [{{"text": "Отписаться от котомемов", "callback_data": "sub:cats:off"}}],
+    ]
 
 
 '''
@@ -52,7 +50,7 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
                             continue
 """,
         """                        if _cb and str(_cb.get("data") or "") not in {
-                            "subscription:cats:on", "subscription:cats:off"
+                            "sub:cats:on", "sub:cats:off"
                         }:
                             try:
                                 await client.answer_callback_query(
@@ -74,30 +72,19 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
 """,
         """                        if (
                             (not pinned_chat or str(cb_chat_id) != pinned_chat)
-                            and cb_data not in {"subscription:cats:on", "subscription:cats:off"}
+                            and cb_data not in {"sub:cats:on", "sub:cats:off"}
                         ):
                             await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["not_authorized"])
                             continue
 
-                        if cb_data in {"subscription:cats:on", "subscription:cats:off"}:
+                        if cb_data in {"sub:cats:on", "sub:cats:off"}:
                             command = "/cats_subscribe" if cb_data.endswith(":on") else "/cats_unsubscribe"
-                            sender_name = _extract_sender_label(cb_sender, cb_chat_id)
-                            sender_label = f"Telegram ({sender_name})"
                             await client.answer_callback_query(cb_id, text="Обрабатываю")
                             await _inject(api, {
                                 "text": command,
                                 "chat_id": cb_chat_id,
                                 "user_id": int(cb_sender.get("id") or cb_chat_id or 1),
                                 "source": "telegram-bridge",
-                                "sender_label": sender_label,
-                                "transport": {
-                                    "kind": "telegram",
-                                    "conversation_id": str(cb_chat_id),
-                                    "sender_label": sender_label,
-                                },
-                                "image_base64": "",
-                                "image_mime": "",
-                                "image_caption": "",
                             })
                             continue
 
@@ -138,5 +125,11 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
 
     if text == original or MARKER not in text:
         return {"ok": False, "error": "Telegram bridge did not match subscription menu patch"}
+    size_bytes = len(text.encode("utf-8"))
+    if size_bytes > MAX_REVIEW_FILE_BYTES:
+        return {
+            "ok": False,
+            "error": f"subscription menu would exceed review file limit: {size_bytes} bytes",
+        }
     plugin.write_text(text, encoding="utf-8")
     return {"ok": True, "changed": True, "path": str(plugin)}

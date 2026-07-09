@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from ouroboros.telegram_subscription_menu_patch import MARKER, patch_plugin
+from ouroboros.telegram_subscription_menu_patch import (
+    MARKER,
+    MAX_REVIEW_FILE_BYTES,
+    patch_plugin,
+)
 
 
 def test_subscription_menu_patch_adds_public_self_service_buttons(tmp_path):
@@ -45,8 +49,9 @@ async def poll():
     assert result["ok"] is True
     assert MARKER in patched
     assert '"command": "subscriptions"' in patched
-    assert "subscription:cats:on" in patched
-    assert "subscription:cats:off" in patched
+    assert "sub:cats:on" in patched
+    assert "sub:cats:off" in patched
     assert 'command = "/cats_subscribe"' in patched
     assert "is_subscriptions_cmd" in patched
     assert patch_plugin(plugin)["changed"] is False
+    assert len(patched.encode("utf-8")) <= MAX_REVIEW_FILE_BYTES
