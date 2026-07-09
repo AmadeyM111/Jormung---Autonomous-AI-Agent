@@ -286,12 +286,14 @@ def emit_task_results(
     outcome_axes = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")})
     execution_status = str((outcome_axes.get("execution") or {}).get("status") or "")
     reason_code = str(loop_outcome.get("reason_code") or "")
-    pending_events.append({
-        "type": "send_message", "chat_id": task["chat_id"],
-        "text": text or "\u200b", "log_text": text or "",
-        "format": "markdown",
-        "task_id": task.get("id"), "ts": utc_now_iso(),
-    })
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    if str(metadata.get("delivery_mode") or "").strip().lower() != "silent":
+        pending_events.append({
+            "type": "send_message", "chat_id": task["chat_id"],
+            "text": text or "\u200b", "log_text": text or "",
+            "format": "markdown",
+            "task_id": task.get("id"), "ts": utc_now_iso(),
+        })
 
     duration_sec = round(time.time() - start_time, 3)
     n_tool_calls = len(llm_trace.get("tool_calls", []))

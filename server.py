@@ -236,9 +236,19 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
             if is_external_transport and external_identity_present
             else None
         )
+        subscription_menu = (
+            _is_subscription_menu_request(text)
+            if is_external_transport and external_identity_present
+            else False
+        )
         # Global owner = primary chat for outbound notices (web on desktop, the
         # first transport on headless Colab). Bound once, on the first message.
-        if owner_id is None and external_identity_present and subscription_action is None:
+        if (
+            owner_id is None
+            and external_identity_present
+            and subscription_action is None
+            and not subscription_menu
+        ):
             st["owner_id"] = user_id
             st["owner_chat_id"] = chat_id
             owner_id = user_id
@@ -278,6 +288,17 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
         ctx.save_state(st)
 
         if not text and not image_base64:
+            continue
+
+        if subscription_menu:
+            ctx.send_with_budget(
+                chat_id,
+                "Управление подписками:\n\n"
+                "Котомемы\n"
+                "• Подписаться: /cats_subscribe\n"
+                "• Отписаться: /cats_unsubscribe\n\n"
+                "Дайджест сейчас доступен только по запросу и автоматически не рассылается.",
+            )
             continue
 
         if subscription_action is not None:
@@ -503,6 +524,16 @@ _CAT_MEME_SUBSCRIBE_RE = re.compile(
     r"подпиши(?:те)?(?:\s+меня)?|подписаться|подписываюсь)",
     flags=re.IGNORECASE,
 )
+
+
+def _is_subscription_menu_request(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().replace("ё", "е").split())
+    return normalized in {
+        "/subscriptions",
+        "/subscription",
+        "подписки",
+        "управление подписками",
+    }
 
 
 def _cat_meme_subscription_action(text: str) -> Optional[str]:

@@ -475,6 +475,8 @@ body
     assert schedules[0]["id"] == "skill-cron-demo-refresh"
     assert schedules[0]["enabled"] is True
     assert schedules[0]["trigger"]["expr"] == "0 * * * *"
+    assert schedules[0]["task"]["metadata"]["delivery_mode"] == "silent"
+    assert queue._task_from_schedule(schedules[0])["chat_id"] == 0
 
 
 def test_skill_schedule_task_text_includes_manifest_description(tmp_path):

@@ -138,6 +138,7 @@ def test_post_broadcast_send_prepared_appends_source_and_marks_sent(tmp_path, mo
         json.dumps({"schema_version": 1, "items": [{"id": "post-1", "status": "prepared"}]}),
         encoding="utf-8",
     )
+    plugin._set_subscription(tmp_path, "7568942324", subscribed=True)
     sent = []
 
     monkeypatch.setattr(
@@ -164,7 +165,7 @@ def test_post_broadcast_send_prepared_appends_source_and_marks_sent(tmp_path, mo
     assert json.loads((tmp_path / "prepared.json").read_text(encoding="utf-8")) == {}
 
 
-def test_post_broadcast_subscription_state_merges_configured_and_manual_ids(tmp_path):
+def test_post_broadcast_requires_explicit_subscription_and_ignores_configured_ids(tmp_path):
     (tmp_path / "config.json").write_text(
         json.dumps({"telegram": {"chat_ids": ["7568942324", "394721762"]}}),
         encoding="utf-8",
@@ -179,10 +180,10 @@ def test_post_broadcast_subscription_state_merges_configured_and_manual_ids(tmp_
     assert status["configured_chat_ids"] == ["7568942324", "394721762"]
     assert status["subscribed_chat_ids"] == ["361255098"]
     assert status["unsubscribed_chat_ids"] == ["394721762"]
-    assert status["active_chat_ids"] == ["7568942324", "361255098"]
+    assert status["active_chat_ids"] == ["361255098"]
 
 
-def test_post_broadcast_send_prepared_skips_unsubscribed_configured_chat(tmp_path, monkeypatch):
+def test_post_broadcast_send_prepared_skips_all_non_subscribed_configured_chats(tmp_path, monkeypatch):
     image_path = tmp_path / "images" / "post.png"
     image_path.parent.mkdir(parents=True)
     image_path.write_bytes(_PNG_BYTES)
@@ -223,9 +224,9 @@ def test_post_broadcast_send_prepared_skips_unsubscribed_configured_chat(tmp_pat
         telegram_token="1234567890:test_token",
     )
 
-    assert result["ok"] is True
-    assert result["requested_chats"] == 1
-    assert sent_chat_ids == ["7568942324"]
+    assert result["ok"] is False
+    assert result["error"] == "no active Telegram broadcast subscribers"
+    assert sent_chat_ids == []
 
 
 def test_post_broadcast_send_prepared_tolerates_stale_prepared_id(tmp_path, monkeypatch):
@@ -244,6 +245,7 @@ def test_post_broadcast_send_prepared_tolerates_stale_prepared_id(tmp_path, monk
         json.dumps({"schema_version": 1, "items": [{"id": "current", "status": "prepared"}]}),
         encoding="utf-8",
     )
+    plugin._set_subscription(tmp_path, "7568942324", subscribed=True)
     monkeypatch.setattr(plugin, "_telegram_send_photo", lambda *_args: {"ok": True})
 
     result = plugin._send_prepared(
@@ -278,6 +280,7 @@ def test_post_broadcast_send_prepared_rejects_empty_caption_and_keeps_prepared(t
         json.dumps({"schema_version": 1, "items": [{"id": "current", "status": "prepared"}]}),
         encoding="utf-8",
     )
+    plugin._set_subscription(tmp_path, "7568942324", subscribed=True)
     sent = []
     monkeypatch.setattr(
         plugin,
@@ -310,6 +313,7 @@ def test_post_broadcast_send_prepared_rejects_retired_static_caption(tmp_path, m
         json.dumps({"schema_version": 1, "items": [{"id": "current", "status": "prepared"}]}),
         encoding="utf-8",
     )
+    plugin._set_subscription(tmp_path, "7568942324", subscribed=True)
     monkeypatch.setattr(plugin, "_telegram_send_photo", lambda *_args: {"ok": True})
 
     result = plugin._send_prepared(
@@ -354,6 +358,7 @@ def test_post_broadcast_send_prepared_rejects_recent_near_duplicate(tmp_path, mo
         ),
         encoding="utf-8",
     )
+    plugin._set_subscription(tmp_path, "7568942324", subscribed=True)
     monkeypatch.setattr(plugin, "_telegram_send_photo", lambda *_args: {"ok": True})
 
     result = plugin._send_prepared(

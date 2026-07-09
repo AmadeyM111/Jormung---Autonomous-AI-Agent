@@ -61,7 +61,7 @@ _DEFAULT_CONFIG: Dict[str, Any] = {
     ],
     "telegram": {
         "bot_id": "8693178834",
-        "chat_ids": ["7568942324"],
+        "chat_ids": [],
         "max_posts_per_run": 1,
         "append_source_link": True,
     },
@@ -224,10 +224,9 @@ def _configured_chat_ids(config: Dict[str, Any]) -> List[str]:
 
 def _effective_chat_ids(state_dir: pathlib.Path, config: Dict[str, Any]) -> List[str]:
     subscriptions = _load_subscriptions(state_dir)
-    configured = _configured_chat_ids(config)
     subscribed = _unique_chat_ids(subscriptions.get("subscribed_chat_ids") or [])
     unsubscribed = set(_unique_chat_ids(subscriptions.get("unsubscribed_chat_ids") or []))
-    return [chat_id for chat_id in _unique_chat_ids([*configured, *subscribed]) if chat_id not in unsubscribed]
+    return [chat_id for chat_id in subscribed if chat_id not in unsubscribed]
 
 
 def _subscription_status(state_dir: pathlib.Path) -> Dict[str, Any]:

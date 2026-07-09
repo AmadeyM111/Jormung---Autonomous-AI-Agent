@@ -302,6 +302,7 @@ def sync_skill_schedules(skills: List[Any], *, drive_root: pathlib.Path | None =
                             "source": "skill_scheduled_task",
                             "skill": str(getattr(skill, "name", "")),
                             "scheduled_task": name,
+                            "delivery_mode": "silent",
                         },
                     },
                     "source": "skill_manifest",
@@ -405,10 +406,12 @@ def _schedule_running_or_queued(schedule_id: str) -> bool:
 
 def _task_from_schedule(record: Dict[str, Any]) -> Dict[str, Any]:
     template = dict(record.get("task") or {})
-    owner_chat_id = load_state().get("owner_chat_id") or 0
+    metadata_template = template.get("metadata") if isinstance(template.get("metadata"), dict) else {}
+    silent_delivery = str(metadata_template.get("delivery_mode") or "").strip().lower() == "silent"
+    owner_chat_id = 0 if silent_delivery else (load_state().get("owner_chat_id") or 0)
     task_id = uuid.uuid4().hex[:8]
     session_id = str(template.get("session_id") or f"schedule-{record.get('id') or task_id}")
-    raw_metadata = template.get("metadata") if isinstance(template.get("metadata"), dict) else {}
+    raw_metadata = metadata_template
     metadata = {
         key: value for key, value in dict(raw_metadata).items()
         if key not in RESERVED_TEMPLATE_FIELDS

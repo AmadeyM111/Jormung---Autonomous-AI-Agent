@@ -69,6 +69,38 @@ def test_cat_meme_non_action_messages_do_not_change_subscription(text):
     assert server._cat_meme_subscription_action(text) is None
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["/subscriptions", "/subscription", "подписки", "Управление подписками"],
+)
+def test_subscription_menu_intents(text):
+    import server
+
+    assert server._is_subscription_menu_request(text) is True
+
+
+def test_external_user_can_open_subscription_menu_without_becoming_owner(monkeypatch):
+    import server
+    import supervisor.message_bus as message_bus
+
+    bridge = Bridge([{
+        "chat": {"id": 4242},
+        "from": {"id": 77},
+        "text": "/subscriptions",
+        "source": "skill:telegram-bridge",
+    }])
+    ctx = Ctx({})
+    monkeypatch.setattr(message_bus, "log_chat", lambda *args, **kwargs: None)
+
+    server._process_bridge_updates(bridge, 0, ctx)
+
+    assert "owner_id" not in ctx.state
+    assert "owner_chat_id" not in ctx.state
+    assert ctx.sent[0][0] == 4242
+    assert "/cats_subscribe" in ctx.sent[0][1]
+    assert "/cats_unsubscribe" in ctx.sent[0][1]
+
+
 def test_external_user_subscribes_with_sender_chat_id_without_becoming_owner(monkeypatch):
     import server
     import supervisor.message_bus as message_bus

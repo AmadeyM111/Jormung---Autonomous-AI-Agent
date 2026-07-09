@@ -164,6 +164,39 @@ def test_emit_task_results_queues_restart_after_final_events(tmp_path, monkeypat
     assert memory_calls == []
 
 
+def test_emit_task_results_suppresses_silent_schedule_chat_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "_store_task_result", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "_run_chat_consolidation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "_run_scratchpad_consolidation", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, "_run_post_task_processing_async", lambda *args, **kwargs: None)
+    pending_events = []
+    drive_logs = tmp_path / "logs"
+    drive_logs.mkdir(parents=True)
+
+    pipeline.emit_task_results(
+        env=SimpleNamespace(drive_root=tmp_path),
+        memory=object(),
+        llm=object(),
+        pending_events=pending_events,
+        task={
+            "id": "scheduled-1",
+            "type": "task",
+            "chat_id": 0,
+            "text": "run broadcast",
+            "metadata": {"delivery_mode": "silent"},
+        },
+        text="⚠️ post_broadcast vision analysis failed",
+        usage={"rounds": 1, "cost": 0},
+        llm_trace={"tool_calls": [], "reasoning_notes": []},
+        start_time=0.0,
+        drive_logs=drive_logs,
+        ctx=SimpleNamespace(pending_restart_reason=""),
+    )
+
+    assert "send_message" not in [evt["type"] for evt in pending_events]
+    assert [evt["type"] for evt in pending_events] == ["task_metrics", "task_done"]
+
+
 def test_build_trace_summary_shows_structured_failure_facts():
     trace = {
         "tool_calls": [{
