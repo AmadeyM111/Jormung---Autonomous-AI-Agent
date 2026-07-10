@@ -37,6 +37,7 @@ _MAX_LAST30DAYS_OUTPUT_BYTES = 2 * 1024 * 1024
 _USER_AGENT = "Ouroboros-ResearchDigest/0.1"
 _CONFIG_FILE = "config.json"
 _RECORDS_FILE = "records.json"
+_SUBSCRIPTIONS_FILE = "subscribers.json"
 _MAX_STORED_ITEMS = 600
 _DEFAULT_MAX_PER_SOURCE = 2
 
@@ -207,6 +208,81 @@ def _save_records(state_dir: pathlib.Path, records: Dict[str, Any]) -> None:
     records["schema_version"] = 1
     records["items"] = items[:_MAX_STORED_ITEMS]
     _atomic_write_json(_state_path(state_dir, _RECORDS_FILE), records)
+
+
+def _normalize_chat_id(chat_id: Any) -> str:
+    text = str(chat_id or "").strip()
+    return text if re.fullmatch(r"-?\d{1,20}", text) else ""
+
+
+def _unique_chat_ids(values: Iterable[Any]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for value in values:
+        chat_id = _normalize_chat_id(value)
+        if chat_id and chat_id not in seen:
+            seen.add(chat_id)
+            result.append(chat_id)
+    return result
+
+
+def _load_subscriptions(state_dir: pathlib.Path) -> Dict[str, Any]:
+    data = _read_json(_state_path(state_dir, _SUBSCRIPTIONS_FILE), {})
+    if not isinstance(data, dict):
+        data = {}
+    data["schema_version"] = 1
+    data["subscribed_chat_ids"] = _unique_chat_ids(data.get("subscribed_chat_ids") or [])
+    data["unsubscribed_chat_ids"] = _unique_chat_ids(data.get("unsubscribed_chat_ids") or [])
+    return data
+
+
+def _save_subscriptions(state_dir: pathlib.Path, subscriptions: Dict[str, Any]) -> None:
+    _atomic_write_json(
+        _state_path(state_dir, _SUBSCRIPTIONS_FILE),
+        {
+            "schema_version": 1,
+            "subscribed_chat_ids": _unique_chat_ids(subscriptions.get("subscribed_chat_ids") or []),
+            "unsubscribed_chat_ids": _unique_chat_ids(subscriptions.get("unsubscribed_chat_ids") or []),
+        },
+    )
+
+
+def _active_subscriber_ids(state_dir: pathlib.Path) -> List[str]:
+    subscriptions = _load_subscriptions(state_dir)
+    unsubscribed = set(subscriptions.get("unsubscribed_chat_ids") or [])
+    return [chat_id for chat_id in subscriptions.get("subscribed_chat_ids") or [] if chat_id not in unsubscribed]
+
+
+def _subscription_status(state_dir: pathlib.Path) -> Dict[str, Any]:
+    subscriptions = _load_subscriptions(state_dir)
+    return {
+        "ok": True,
+        "subscribed_chat_ids": list(subscriptions.get("subscribed_chat_ids") or []),
+        "unsubscribed_chat_ids": list(subscriptions.get("unsubscribed_chat_ids") or []),
+        "active_chat_ids": _active_subscriber_ids(state_dir),
+    }
+
+
+def _set_subscription(state_dir: pathlib.Path, chat_id: str, *, subscribed: bool) -> Dict[str, Any]:
+    normalized = _normalize_chat_id(chat_id)
+    if not normalized:
+        return {"ok": False, "error": "chat_id is required"}
+    subscriptions = _load_subscriptions(state_dir)
+    subscribed_ids = _unique_chat_ids(subscriptions.get("subscribed_chat_ids") or [])
+    unsubscribed_ids = _unique_chat_ids(subscriptions.get("unsubscribed_chat_ids") or [])
+    if subscribed:
+        subscribed_ids = _unique_chat_ids([*subscribed_ids, normalized])
+        unsubscribed_ids = [item for item in unsubscribed_ids if item != normalized]
+    else:
+        subscribed_ids = [item for item in subscribed_ids if item != normalized]
+        unsubscribed_ids = _unique_chat_ids([*unsubscribed_ids, normalized])
+    subscriptions["subscribed_chat_ids"] = subscribed_ids
+    subscriptions["unsubscribed_chat_ids"] = unsubscribed_ids
+    _save_subscriptions(state_dir, subscriptions)
+    payload = _subscription_status(state_dir)
+    payload["chat_id"] = normalized
+    payload["subscribed"] = subscribed
+    return payload
 
 
 def _is_blocked_host(host: str) -> bool:
@@ -898,6 +974,107 @@ def _tool_prepare_digest(
     )
 
 
+def _telegram_send_message(token: str, chat_id: str, text: str) -> Dict[str, Any]:
+    if not token:
+        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN is not configured"}
+    payload = urllib.parse.urlencode({
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": "true",
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_TIMEOUT_SEC) as response:
+            raw = response.read(256 * 1024)
+    except urllib.error.HTTPError as exc:
+        body = exc.read(2048).decode("utf-8", errors="replace")
+        return {"ok": False, "error": f"telegram_http_{exc.code}: {body[:500]}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        data = {"ok": False, "error": raw[:500].decode("utf-8", errors="replace")}
+    return data if isinstance(data, dict) else {"ok": False, "error": "invalid Telegram response"}
+
+
+def _send_digest(
+    state_dir: pathlib.Path,
+    *,
+    telegram_token: str,
+    hours: int = 168,
+    limit: int = 6,
+    min_score: int = 1,
+    refresh: bool = True,
+    limit_per_source: int = 30,
+    max_per_source: int = _DEFAULT_MAX_PER_SOURCE,
+) -> Dict[str, Any]:
+    chat_ids = _active_subscriber_ids(state_dir)
+    if not chat_ids:
+        return {"ok": True, "sent_count": 0, "active_chat_ids": [], "message": "no active digest subscribers"}
+    prepared = _prepare_digest(
+        state_dir,
+        hours=hours,
+        limit=limit,
+        min_score=min_score,
+        refresh=refresh,
+        limit_per_source=limit_per_source,
+        max_per_source=max_per_source,
+    )
+    if not prepared.get("ok"):
+        return {"ok": False, "error": prepared.get("error") or "digest preparation failed", "prepared": prepared}
+    text = str(prepared.get("final_response") or prepared.get("digest", {}).get("markdown") or "").strip()
+    if not text:
+        return {"ok": False, "error": "prepared digest is empty", "prepared": prepared}
+    sent: List[str] = []
+    failed: List[Dict[str, str]] = []
+    for chat_id in chat_ids:
+        result = _telegram_send_message(telegram_token, chat_id, text[:3900])
+        if result.get("ok"):
+            sent.append(chat_id)
+        else:
+            failed.append({"chat_id": chat_id, "error": str(result.get("error") or result)[:500]})
+    return {
+        "ok": not failed,
+        "sent_count": len(sent),
+        "sent_chat_ids": sent,
+        "failed": failed,
+        "digest": prepared.get("digest", {}),
+        "refresh": prepared.get("refresh", {}),
+    }
+
+
+def _tool_send_digest(
+    *,
+    state_dir: pathlib.Path,
+    telegram_token: str,
+    hours: int = 168,
+    limit: int = 6,
+    min_score: int = 1,
+    refresh: bool = True,
+    limit_per_source: int = 30,
+    max_per_source: int = _DEFAULT_MAX_PER_SOURCE,
+) -> str:
+    return json.dumps(
+        _send_digest(
+            state_dir,
+            telegram_token=telegram_token,
+            hours=hours,
+            limit=limit,
+            min_score=min_score,
+            refresh=_bool_arg(refresh, default=True),
+            limit_per_source=limit_per_source,
+            max_per_source=max_per_source,
+        ),
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 def _tool_sources(*, state_dir: pathlib.Path) -> str:
     return json.dumps(_list_sources(state_dir), ensure_ascii=False, indent=2)
 
@@ -947,6 +1124,13 @@ async def _json_body(request: Request) -> Dict[str, Any]:
 def register(api: Any) -> None:
     state_dir = pathlib.Path(api.get_state_dir())
 
+    def _settings_token() -> str:
+        try:
+            settings = api.get_settings(["TELEGRAM_BOT_TOKEN"])
+        except Exception:
+            settings = {}
+        return str((settings or {}).get("TELEGRAM_BOT_TOKEN") or "").strip()
+
     async def route_refresh(request: Request) -> JSONResponse:
         body = await _json_body(request) if request.method != "GET" else {}
         limit = int(body.get("limit_per_source") or request.query_params.get("limit_per_source") or 20)
@@ -965,6 +1149,32 @@ def register(api: Any) -> None:
         body = await _json_body(request)
         status = _upsert_source(state_dir, body)
         return JSONResponse(status, status_code=200 if status.get("ok") else 400)
+
+    async def route_subscribe(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        chat_id = body.get("chat_id") or request.query_params.get("chat_id")
+        payload = _set_subscription(state_dir, str(chat_id or ""), subscribed=True)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
+
+    async def route_unsubscribe(request: Request) -> JSONResponse:
+        body = await _json_body(request)
+        chat_id = body.get("chat_id") or request.query_params.get("chat_id")
+        payload = _set_subscription(state_dir, str(chat_id or ""), subscribed=False)
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
+
+    async def route_send_digest(request: Request) -> JSONResponse:
+        body = await _json_body(request) if request.method != "GET" else {}
+        payload = _send_digest(
+            state_dir,
+            telegram_token=_settings_token(),
+            hours=int(body.get("hours") or request.query_params.get("hours") or 168),
+            limit=int(body.get("limit") or request.query_params.get("limit") or 6),
+            min_score=int(body.get("min_score") or request.query_params.get("min_score") or 1),
+            refresh=_bool_arg(body.get("refresh") or request.query_params.get("refresh"), default=True),
+            limit_per_source=int(body.get("limit_per_source") or request.query_params.get("limit_per_source") or 30),
+            max_per_source=int(body.get("max_per_source") or request.query_params.get("max_per_source") or _DEFAULT_MAX_PER_SOURCE),
+        )
+        return JSONResponse(payload, status_code=200 if payload.get("ok") else 400)
 
     api.register_tool(
         "refresh",
@@ -1017,6 +1227,35 @@ def register(api: Any) -> None:
         timeout_sec=150,
     )
     api.register_tool(
+        "send_digest",
+        lambda hours=168, limit=6, min_score=1, refresh=True, limit_per_source=30, max_per_source=_DEFAULT_MAX_PER_SOURCE: _tool_send_digest(
+            state_dir=state_dir,
+            telegram_token=_settings_token(),
+            hours=int(hours or 168),
+            limit=int(limit or 6),
+            min_score=int(min_score or 1),
+            refresh=_bool_arg(refresh, default=True),
+            limit_per_source=int(limit_per_source or 30),
+            max_per_source=int(max_per_source or _DEFAULT_MAX_PER_SOURCE),
+        ),
+        description=(
+            "Prepare and send the scheduled research digest only to Telegram chat_ids that explicitly "
+            "subscribed to research_digest. Do not use configured owner chats as recipients."
+        ),
+        schema={
+            "type": "object",
+            "properties": {
+                "hours": {"type": "integer"},
+                "limit": {"type": "integer"},
+                "min_score": {"type": "integer"},
+                "refresh": {"type": "boolean"},
+                "limit_per_source": {"type": "integer"},
+                "max_per_source": {"type": "integer"},
+            },
+        },
+        timeout_sec=180,
+    )
+    api.register_tool(
         "digest",
         lambda hours=48, limit=12, min_score=1: _tool_digest(
             state_dir=state_dir,
@@ -1034,6 +1273,33 @@ def register(api: Any) -> None:
             },
         },
         timeout_sec=20,
+    )
+    api.register_tool(
+        "subscribe",
+        lambda chat_id="": json.dumps(
+            _set_subscription(state_dir, str(chat_id or ""), subscribed=True),
+            ensure_ascii=False,
+        ),
+        description="Subscribe a Telegram chat_id to scheduled research_digest delivery.",
+        schema={"type": "object", "properties": {"chat_id": {"type": "string"}}},
+        timeout_sec=10,
+    )
+    api.register_tool(
+        "unsubscribe",
+        lambda chat_id="": json.dumps(
+            _set_subscription(state_dir, str(chat_id or ""), subscribed=False),
+            ensure_ascii=False,
+        ),
+        description="Unsubscribe a Telegram chat_id from scheduled research_digest delivery.",
+        schema={"type": "object", "properties": {"chat_id": {"type": "string"}}},
+        timeout_sec=10,
+    )
+    api.register_tool(
+        "list_subscribers",
+        lambda: json.dumps(_subscription_status(state_dir), ensure_ascii=False),
+        description="Return subscribed, unsubscribed, and active research_digest Telegram chat_ids.",
+        schema={"type": "object", "properties": {}},
+        timeout_sec=10,
     )
     api.register_tool(
         "sources",
@@ -1077,6 +1343,9 @@ def register(api: Any) -> None:
     api.register_route("refresh", route_refresh, methods=("POST", "GET"))
     api.register_route("digest", route_digest, methods=("GET",))
     api.register_route("sources", route_sources, methods=("GET", "POST"))
+    api.register_route("send_digest", route_send_digest, methods=("POST", "GET"))
+    api.register_route("subscribe", route_subscribe, methods=("POST", "GET"))
+    api.register_route("unsubscribe", route_unsubscribe, methods=("POST", "GET"))
     api.register_ui_tab(
         "digest",
         "Research digest",

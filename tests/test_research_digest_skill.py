@@ -249,3 +249,61 @@ def test_tool_prepare_digest_parses_string_false_refresh(tmp_path):
 
     assert payload["ok"] is True
     assert payload["refresh"]["enabled"] is False
+
+
+def test_research_digest_subscription_state_is_explicit_opt_in(tmp_path):
+    state_dir = pathlib.Path(tmp_path)
+
+    empty = plugin._subscription_status(state_dir)
+    subscribed = plugin._set_subscription(state_dir, "4242", subscribed=True)
+    unsubscribed = plugin._set_subscription(state_dir, "4242", subscribed=False)
+
+    assert empty["active_chat_ids"] == []
+    assert subscribed["ok"] is True
+    assert subscribed["active_chat_ids"] == ["4242"]
+    assert unsubscribed["ok"] is True
+    assert unsubscribed["active_chat_ids"] == []
+    assert unsubscribed["unsubscribed_chat_ids"] == ["4242"]
+
+
+def test_research_digest_send_digest_targets_only_active_subscribers(tmp_path, monkeypatch):
+    state_dir = pathlib.Path(tmp_path)
+    plugin._set_subscription(state_dir, "111", subscribed=True)
+    plugin._set_subscription(state_dir, "222", subscribed=True)
+    plugin._set_subscription(state_dir, "222", subscribed=False)
+    now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    (state_dir / "records.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "items": [{
+                "id": "high",
+                "title": "AI agents for production ML",
+                "url": "https://example.com/high",
+                "source_title": "High",
+                "summary": "Business implementation notes.",
+                "published_at": now,
+                "fetched_at": now,
+                "score": 9,
+            }],
+        }),
+        encoding="utf-8",
+    )
+    sent = []
+    monkeypatch.setattr(
+        plugin,
+        "_telegram_send_message",
+        lambda _token, chat_id, text: sent.append((chat_id, text)) or {"ok": True},
+    )
+
+    result = plugin._send_digest(
+        state_dir,
+        telegram_token="token",
+        refresh=False,
+        hours=48,
+        limit=1,
+    )
+
+    assert result["ok"] is True
+    assert result["sent_count"] == 1
+    assert sent[0][0] == "111"
+    assert "AI agents for production ML" in sent[0][1]

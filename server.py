@@ -231,8 +231,13 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
         is_slash_command = lowered.startswith("/")
         is_external_transport = source != "web"
         external_identity_present = (not is_external_transport) or (chat_id > 0 and user_id > 0)
-        subscription_action = (
+        cat_subscription_action = (
             _cat_meme_subscription_action(text)
+            if is_external_transport and external_identity_present
+            else None
+        )
+        digest_subscription_action = (
+            _digest_subscription_action(text)
             if is_external_transport and external_identity_present
             else None
         )
@@ -246,7 +251,8 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
         if (
             owner_id is None
             and external_identity_present
-            and subscription_action is None
+            and cat_subscription_action is None
+            and digest_subscription_action is None
             and not subscription_menu
         ):
             st["owner_id"] = user_id
@@ -297,13 +303,15 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
                 "Котомемы\n"
                 "• Подписаться: /cats_subscribe\n"
                 "• Отписаться: /cats_unsubscribe\n\n"
-                "Дайджест сейчас доступен только по запросу и автоматически не рассылается.",
+                "Дайджест\n"
+                "• Подписаться: /digest_subscribe\n"
+                "• Отписаться: /digest_unsubscribe",
             )
             continue
 
-        if subscription_action is not None:
-            ok, detail = _apply_post_broadcast_subscription(ctx, chat_id, subscription_action)
-            if ok and subscription_action == "subscribe":
+        if cat_subscription_action is not None:
+            ok, detail = _apply_post_broadcast_subscription(ctx, chat_id, cat_subscription_action)
+            if ok and cat_subscription_action == "subscribe":
                 ctx.send_with_budget(
                     chat_id,
                     "✅ Вы подписаны на рассылку котомемов. Чтобы отписаться, напишите: "
@@ -319,6 +327,27 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
                 ctx.send_with_budget(
                     chat_id,
                     f"⚠️ Не удалось изменить подписку на котомемы: {detail}",
+                )
+            continue
+
+        if digest_subscription_action is not None:
+            ok, detail = _apply_research_digest_subscription(ctx, chat_id, digest_subscription_action)
+            if ok and digest_subscription_action == "subscribe":
+                ctx.send_with_budget(
+                    chat_id,
+                    "✅ Вы подписаны на AI-дайджест. Чтобы отписаться, напишите: "
+                    "«не хочу получать дайджест».",
+                )
+            elif ok:
+                ctx.send_with_budget(
+                    chat_id,
+                    "✅ Вы отписаны от AI-дайджеста. Подписаться снова можно сообщением: "
+                    "«хочу получать дайджест».",
+                )
+            else:
+                ctx.send_with_budget(
+                    chat_id,
+                    f"⚠️ Не удалось изменить подписку на дайджест: {detail}",
                 )
             continue
 
@@ -524,6 +553,10 @@ _CAT_MEME_SUBSCRIBE_RE = re.compile(
     r"подпиши(?:те)?(?:\s+меня)?|подписаться|подписываюсь)",
     flags=re.IGNORECASE,
 )
+_DIGEST_TOPIC_RE = re.compile(
+    r"(?:дайджест\w*|новост\w*\s+дайджест\w*|ai\s*дайджест\w*|ии\s*дайджест\w*)",
+    flags=re.IGNORECASE,
+)
 
 
 def _is_subscription_menu_request(text: str) -> bool:
@@ -552,12 +585,28 @@ def _cat_meme_subscription_action(text: str) -> Optional[str]:
     return None
 
 
-def _apply_post_broadcast_subscription(ctx: Any, chat_id: int, action: str) -> tuple[bool, str]:
-    """Invoke the reviewed post_broadcast subscription tool for the sender chat."""
+def _digest_subscription_action(text: str) -> Optional[str]:
+    """Recognize Telegram self-service subscribe/unsubscribe intents for research_digest."""
+    normalized = " ".join(str(text or "").lower().replace("ё", "е").split())
+    if normalized in {"/digest_unsubscribe", "/research_digest_unsubscribe"}:
+        return "unsubscribe"
+    if normalized in {"/digest_subscribe", "/research_digest_subscribe"}:
+        return "subscribe"
+    if not _DIGEST_TOPIC_RE.search(normalized):
+        return None
+    if _CAT_MEME_UNSUBSCRIBE_RE.search(normalized):
+        return "unsubscribe"
+    if _CAT_MEME_SUBSCRIBE_RE.search(normalized):
+        return "subscribe"
+    return None
+
+
+def _apply_extension_subscription(ctx: Any, chat_id: int, action: str, skill_name: str, log_label: str) -> tuple[bool, str]:
+    """Invoke a reviewed extension subscription tool for the sender chat."""
     from ouroboros.extension_loader import snapshot
 
     operation = "subscribe" if action == "subscribe" else "unsubscribe"
-    suffix = f"_post_broadcast_{operation}"
+    suffix = f"_{skill_name}_{operation}"
     tool_name = next(
         (name for name in snapshot().get("tools", []) if str(name).endswith(suffix)),
         "",
@@ -589,7 +638,7 @@ def _apply_post_broadcast_subscription(ctx: Any, chat_id: int, action: str) -> t
                 else:
                     setattr(tool_ctx, "_trusted_direct_extension_tool", previous)
     except Exception:
-        log.warning("Telegram cat-meme subscription tool failed", exc_info=True)
+        log.warning("Telegram %s subscription tool failed", log_label, exc_info=True)
         return False, "внутренняя ошибка сервиса"
 
     try:
@@ -599,6 +648,14 @@ def _apply_post_broadcast_subscription(ctx: Any, chat_id: int, action: str) -> t
     if not isinstance(payload, dict) or not payload.get("ok"):
         return False, str(payload.get("error") or raw[:300] or "неизвестная ошибка")
     return True, ""
+
+
+def _apply_post_broadcast_subscription(ctx: Any, chat_id: int, action: str) -> tuple[bool, str]:
+    return _apply_extension_subscription(ctx, chat_id, action, "post_broadcast", "cat-meme")
+
+
+def _apply_research_digest_subscription(ctx: Any, chat_id: int, action: str) -> tuple[bool, str]:
+    return _apply_extension_subscription(ctx, chat_id, action, "research_digest", "research-digest")
 
 
 def _runtime_branch_defaults() -> tuple[str, str]:

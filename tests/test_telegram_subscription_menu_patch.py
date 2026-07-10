@@ -49,9 +49,11 @@ async def poll():
     assert result["ok"] is True
     assert MARKER in patched
     assert '"command": "subscriptions"' in patched
-    assert "sub:cats:on" in patched
-    assert "sub:cats:off" in patched
-    assert 'command = "/cats_subscribe"' in patched
+    assert "s:c1" in patched
+    assert "s:c0" in patched
+    assert "s:d1" in patched
+    assert "s:d0" in patched
+    assert "else 'digest'" in patched
     assert "is_subscriptions_cmd" in patched
     assert patch_plugin(plugin)["changed"] is False
     assert len(patched.encode("utf-8")) <= MAX_REVIEW_FILE_BYTES

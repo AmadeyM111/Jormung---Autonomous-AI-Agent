@@ -5,15 +5,15 @@
   "version": "0.1.0",
   "type": "extension",
   "entry": "plugin.py",
-  "permissions": ["net", "tool", "route", "widget", "supervised_task"],
-  "env_from_settings": [],
+  "permissions": ["net", "tool", "route", "widget", "supervised_task", "read_settings"],
+  "env_from_settings": ["TELEGRAM_BOT_TOKEN"],
   "when_to_use": "User wants to monitor AI, engineering, ML adoption, agentic systems, business implementation cases, research papers, or prepare a Telegram-channel news digest.",
   "scheduled_tasks": [
     {
       "name": "daily_ai_research_digest",
       "cron": "0 14 * * *",
       "timezone": "Europe/Moscow",
-      "description": "At 14:00 Moscow time, prepare a weekly Telegram-ready digest with exactly 6 highest-scoring items using the research digest prepare_digest tool (hours=168, limit=6, min_score=1, refresh=true, limit_per_source=30). Return its final_response directly and mention source errors only if the tool reports them."
+      "description": "At 14:00 Moscow time, call the research_digest send_digest tool with hours=168, limit=6, min_score=1, refresh=true, limit_per_source=30, max_per_source=2. It must send only to explicit research_digest subscribers and report sent_count."
     }
   ],
   "ui_tab": {

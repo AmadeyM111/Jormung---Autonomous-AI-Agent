@@ -457,8 +457,8 @@ def test_bootstrap_review_bundled_research_digest_writes_clean_review(tmp_path, 
   "version": "0.1.0",
   "type": "extension",
   "entry": "plugin.py",
-  "permissions": ["net", "tool", "route", "widget", "supervised_task"],
-  "env_from_settings": []
+  "permissions": ["net", "tool", "route", "widget", "supervised_task", "read_settings"],
+  "env_from_settings": ["TELEGRAM_BOT_TOKEN"]
 }
 """,
         encoding="utf-8",
@@ -474,6 +474,7 @@ def test_bootstrap_review_bundled_research_digest_writes_clean_review(tmp_path, 
     assert loaded.review.status == "clean"
     assert loaded.review.review_profile == "bundled_native_research_digest"
     assert grants["all_granted"] is True
+    assert grants["requested_keys"] == ["TELEGRAM_BOT_TOKEN"]
 
 
 def test_bootstrap_review_bundled_post_broadcast_writes_clean_review(tmp_path, monkeypatch):

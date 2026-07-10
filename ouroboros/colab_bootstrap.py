@@ -401,6 +401,8 @@ def _retryable_review_error(message: str) -> bool:
             "rate_limit",
             "too many requests",
             "429",
+            "per-file cap",
+            "over the 65536-byte",
         )
     )
 
@@ -916,12 +918,12 @@ def _bootstrap_review_bundled_research_digest(
             return {"ok": False, "error": "research_digest is not installed as a native bundled skill"}
         if not (skill_dir / ".seed-origin").is_file():
             return {"ok": False, "error": "research_digest native skill is missing seed provenance"}
-        expected_permissions = {"net", "tool", "route", "widget", "supervised_task"}
+        expected_permissions = {"net", "tool", "route", "widget", "supervised_task", "read_settings"}
         actual_permissions = {str(item or "").strip() for item in (skill.manifest.permissions or [])}
         if actual_permissions != expected_permissions:
             return {"ok": False, "error": f"unexpected research_digest permissions: {sorted(actual_permissions)}"}
-        if list(skill.manifest.env_from_settings or []):
-            return {"ok": False, "error": "research_digest must not request provider or Telegram keys"}
+        if list(skill.manifest.env_from_settings or []) != ["TELEGRAM_BOT_TOKEN"]:
+            return {"ok": False, "error": "research_digest must request only TELEGRAM_BOT_TOKEN"}
 
         save_review_state(
             drive_root,
@@ -938,9 +940,10 @@ def _bootstrap_review_bundled_research_digest(
                             "Colab bootstrap accepted the bundled native "
                             "research_digest payload after Groq skill-review "
                             "quorum failed to return parseable findings. The "
-                            "skill requests no provider keys, reads configured "
-                            "public RSS/Atom and Telegram web sources, and stores "
-                            "state only in its skill state directory."
+                            "skill reads configured public RSS/Atom and Telegram "
+                            "web sources, stores state only in its skill state "
+                            "directory, and requests only TELEGRAM_BOT_TOKEN for "
+                            "explicit opt-in digest delivery."
                         ),
                         "model": "colab_bootstrap",
                     }

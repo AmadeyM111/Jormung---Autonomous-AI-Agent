@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 from typing import Any, Dict
 
 
@@ -16,29 +17,42 @@ def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
         text = plugin.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {"ok": False, "error": f"Telegram bridge plugin not found: {plugin}"}
-    if MARKER in text:
+    if MARKER in text and "s:d1" in text and "else 'digest'" in text:
         return {"ok": True, "changed": False, "path": str(plugin)}
-
     original = text
     helper = f'''
 # {MARKER}
-def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
-    return "Управление подписками", [
-        [{{"text": "Подписаться на котомемы", "callback_data": "sub:cats:on"}}],
-        [{{"text": "Отписаться от котомемов", "callback_data": "sub:cats:off"}}],
+_SUB_CB = {{"s:c1", "s:c0", "s:d1", "s:d0"}}
+def _build_subscription_keyboard():
+    return "Подписки", [
+        [{{"text": "Коты +", "callback_data": "s:c1"}}, {{"text": "Коты -", "callback_data": "s:c0"}}],
+        [{{"text": "Дайджест +", "callback_data": "s:d1"}}, {{"text": "Дайджест -", "callback_data": "s:d0"}}],
     ]
 
 
 '''
-    text = text.replace("def _build_menu_keyboard(", helper + "def _build_menu_keyboard(", 1)
-    text = text.replace(
+    if MARKER in text:
+        text = re.sub(
+            rf"# {MARKER}.*?\n\ndef _build_menu_keyboard\(",
+            helper + "def _build_menu_keyboard(",
+            text,
+            count=1,
+            flags=re.S,
+        )
+        text = text.replace('str(_cb.get("data") or "") not in {\n                            "sub:cats:on", "sub:cats:off"\n                        }', 'str(_cb.get("data") or "") not in _SUB_CB')
+        text = text.replace('cb_data not in {"sub:cats:on", "sub:cats:off"}', "cb_data not in _SUB_CB")
+        text = text.replace('if cb_data in {"sub:cats:on", "sub:cats:off"}:', "if cb_data in _SUB_CB:")
+        text = text.replace('command = "/cats_subscribe" if cb_data.endswith(":on") else "/cats_unsubscribe"', 'command = f"/{\'cats\' if cb_data[2] == \'c\' else \'digest\'}_{\'subscribe\' if cb_data.endswith(\'1\') else \'unsubscribe\'}"')
+    else:
+        text = text.replace("def _build_menu_keyboard(", helper + "def _build_menu_keyboard(", 1)
+        text = text.replace(
         'await client.call("setMyCommands", data={"commands": json.dumps([])})',
         'await client.call("setMyCommands", data={"commands": json.dumps(['
         '{"command": "subscriptions", "description": "Управление подписками"}'
         '])})',
         1,
-    )
-    text = text.replace(
+        )
+        text = text.replace(
         """                        if _cb:
                             try:
                                 await client.answer_callback_query(
@@ -49,9 +63,7 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
                                 pass
                             continue
 """,
-        """                        if _cb and str(_cb.get("data") or "") not in {
-                            "sub:cats:on", "sub:cats:off"
-                        }:
+        """                        if _cb and str(_cb.get("data") or "") not in _SUB_CB:
                             try:
                                 await client.answer_callback_query(
                                     str(_cb.get("id") or ""),
@@ -62,8 +74,8 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
                             continue
 """,
         1,
-    )
-    text = text.replace(
+        )
+        text = text.replace(
         """                        if not pinned_chat or str(cb_chat_id) != pinned_chat:
                             await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["not_authorized"])
                             continue
@@ -72,13 +84,13 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
 """,
         """                        if (
                             (not pinned_chat or str(cb_chat_id) != pinned_chat)
-                            and cb_data not in {"sub:cats:on", "sub:cats:off"}
+                            and cb_data not in _SUB_CB
                         ):
                             await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["not_authorized"])
                             continue
 
-                        if cb_data in {"sub:cats:on", "sub:cats:off"}:
-                            command = "/cats_subscribe" if cb_data.endswith(":on") else "/cats_unsubscribe"
+                        if cb_data in _SUB_CB:
+                            command = f"/{'cats' if cb_data[2] == 'c' else 'digest'}_{'subscribe' if cb_data.endswith('1') else 'unsubscribe'}"
                             await client.answer_callback_query(cb_id, text="Обрабатываю")
                             await _inject(api, {
                                 "text": command,
@@ -91,8 +103,8 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
                         # --- Dynamic Tab Navigation (Category 1) ---
 """,
         1,
-    )
-    text = text.replace(
+        )
+        text = text.replace(
         """                    if is_start_cmd:
                         await client.send_message(
                             chat_id,
@@ -106,8 +118,8 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
                         continue
 """,
         1,
-    )
-    text = text.replace(
+        )
+        text = text.replace(
         """                    # Handle /menu command locally""",
         """                    is_subscriptions_cmd = (
                         cleaned_text == "/subscriptions"
@@ -121,12 +133,13 @@ def _build_subscription_keyboard() -> tuple[str, list[list[dict]]]:
 
                     # Handle /menu command locally""",
         1,
-    )
+        )
 
     if text == original or MARKER not in text:
         return {"ok": False, "error": "Telegram bridge did not match subscription menu patch"}
+    original_size_bytes = len(original.encode("utf-8"))
     size_bytes = len(text.encode("utf-8"))
-    if size_bytes > MAX_REVIEW_FILE_BYTES:
+    if original_size_bytes <= MAX_REVIEW_FILE_BYTES and size_bytes > MAX_REVIEW_FILE_BYTES:
         return {
             "ok": False,
             "error": f"subscription menu would exceed review file limit: {size_bytes} bytes",
