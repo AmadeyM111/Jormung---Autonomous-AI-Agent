@@ -17,7 +17,13 @@ def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
         text = plugin.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {"ok": False, "error": f"Telegram bridge plugin not found: {plugin}"}
-    if MARKER in text and "s:d1" in text and "else 'digest'" in text:
+    if (
+        MARKER in text
+        and "s:d1" in text
+        and "else 'digest'" in text
+        and "return _build_subscription_keyboard()" in text
+        and "OUROBOROS_SUB_ROOT_ONLY" in text
+    ):
         return {"ok": True, "changed": False, "path": str(plugin)}
     original = text
     helper = f'''
@@ -30,11 +36,22 @@ def _build_subscription_keyboard():
     ]
 
 
+def _build_menu_keyboard(command_mode: str, lang: str = "en"):
+    return _build_subscription_keyboard()
+
+
 '''
     if MARKER in text:
         text = re.sub(
             rf"# {MARKER}.*?\n\ndef _build_menu_keyboard\(",
-            helper + "def _build_menu_keyboard(",
+            helper + "def _build_menu_keyboard_legacy(",
+            text,
+            count=1,
+            flags=re.S,
+        )
+        text = re.sub(
+            r"def _bot_commands\(command_mode: str\) -> list:.*?\n    return cmds\n",
+            'def _bot_commands(command_mode: str) -> list:\n    return [{"command": "menu", "description": "Подписки / Subscriptions"}]\n',
             text,
             count=1,
             flags=re.S,
@@ -44,7 +61,14 @@ def _build_subscription_keyboard():
         text = text.replace('if cb_data in {"sub:cats:on", "sub:cats:off"}:', "if cb_data in _SUB_CB:")
         text = text.replace('command = "/cats_subscribe" if cb_data.endswith(":on") else "/cats_unsubscribe"', 'command = f"/{\'cats\' if cb_data[2] == \'c\' else \'digest\'}_{\'subscribe\' if cb_data.endswith(\'1\') else \'unsubscribe\'}"')
     else:
-        text = text.replace("def _build_menu_keyboard(", helper + "def _build_menu_keyboard(", 1)
+        text = text.replace("def _build_menu_keyboard(", helper + "def _build_menu_keyboard_legacy(", 1)
+        text = re.sub(
+            r"def _bot_commands\(command_mode: str\) -> list:.*?\n    return cmds\n",
+            'def _bot_commands(command_mode: str) -> list:\n    return [{"command": "menu", "description": "Подписки / Subscriptions"}]\n',
+            text,
+            count=1,
+            flags=re.S,
+        )
         text = text.replace(
         'await client.call("setMyCommands", data={"commands": json.dumps([])})',
         'await client.call("setMyCommands", data={"commands": json.dumps(['
@@ -100,6 +124,10 @@ def _build_subscription_keyboard():
                             })
                             continue
 
+                        # OUROBOROS_SUB_ROOT_ONLY
+                        await client.answer_callback_query(cb_id, text="Недоступно")
+                        continue
+
                         # --- Dynamic Tab Navigation (Category 1) ---
 """,
         1,
@@ -133,6 +161,16 @@ def _build_subscription_keyboard():
 
                     # Handle /menu command locally""",
         1,
+        )
+    if "OUROBOROS_SUB_ROOT_ONLY" not in text:
+        text = text.replace(
+            "                        # --- Dynamic Tab Navigation (Category 1) ---",
+            """                        # OUROBOROS_SUB_ROOT_ONLY
+                        await client.answer_callback_query(cb_id, text="Недоступно")
+                        continue
+
+                        # --- Dynamic Tab Navigation (Category 1) ---""",
+            1,
         )
 
     if text == original or MARKER not in text:

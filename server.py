@@ -299,13 +299,7 @@ def _process_bridge_updates(bridge, offset: int, ctx: Any) -> int:
         if subscription_menu:
             ctx.send_with_budget(
                 chat_id,
-                "Управление подписками:\n\n"
-                "Котомемы\n"
-                "• Подписаться: /cats_subscribe\n"
-                "• Отписаться: /cats_unsubscribe\n\n"
-                "Дайджест\n"
-                "• Подписаться: /digest_subscribe\n"
-                "• Отписаться: /digest_unsubscribe",
+                "Управление подписками доступно через кнопку Menu в Telegram.",
             )
             continue
 

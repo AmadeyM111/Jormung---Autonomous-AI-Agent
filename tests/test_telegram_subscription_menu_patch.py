@@ -48,12 +48,13 @@ async def poll():
 
     assert result["ok"] is True
     assert MARKER in patched
-    assert '"command": "subscriptions"' in patched
     assert "s:c1" in patched
     assert "s:c0" in patched
     assert "s:d1" in patched
     assert "s:d0" in patched
     assert "else 'digest'" in patched
+    assert "return _build_subscription_keyboard()" in patched
+    assert "OUROBOROS_SUB_ROOT_ONLY" in patched
     assert "is_subscriptions_cmd" in patched
     assert patch_plugin(plugin)["changed"] is False
     assert len(patched.encode("utf-8")) <= MAX_REVIEW_FILE_BYTES

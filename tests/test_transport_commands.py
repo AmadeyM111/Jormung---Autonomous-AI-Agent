@@ -127,10 +127,9 @@ def test_external_user_can_open_subscription_menu_without_becoming_owner(monkeyp
     assert "owner_id" not in ctx.state
     assert "owner_chat_id" not in ctx.state
     assert ctx.sent[0][0] == 4242
-    assert "/cats_subscribe" in ctx.sent[0][1]
-    assert "/cats_unsubscribe" in ctx.sent[0][1]
-    assert "/digest_subscribe" in ctx.sent[0][1]
-    assert "/digest_unsubscribe" in ctx.sent[0][1]
+    assert "Menu" in ctx.sent[0][1]
+    assert "/cats_subscribe" not in ctx.sent[0][1]
+    assert "/digest_subscribe" not in ctx.sent[0][1]
 
 
 def test_external_user_subscribes_with_sender_chat_id_without_becoming_owner(monkeypatch):
