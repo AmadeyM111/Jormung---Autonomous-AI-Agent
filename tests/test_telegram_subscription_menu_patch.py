@@ -52,9 +52,14 @@ async def poll():
     assert "s:c0" in patched
     assert "s:d1" in patched
     assert "s:d0" in patched
+    assert "sub:cats:on" in patched
+    assert "sub:digest:on" in patched
     assert "else 'digest'" in patched
+    assert "_subscription_command_from_callback" in patched
     assert "return _build_subscription_keyboard()" in patched
     assert "OUROBOROS_SUB_ROOT_ONLY" in patched
+    assert 'text="Недоступно"' not in patched
+    assert 'text="Подписки"' in patched
     assert "is_subscriptions_cmd" in patched
     assert patch_plugin(plugin)["changed"] is False
     assert len(patched.encode("utf-8")) <= MAX_REVIEW_FILE_BYTES

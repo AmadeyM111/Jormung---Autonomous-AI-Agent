@@ -23,17 +23,30 @@ def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
         and "else 'digest'" in text
         and "return _build_subscription_keyboard()" in text
         and "OUROBOROS_SUB_ROOT_ONLY" in text
+        and "_subscription_command_from_callback" in text
+        and 'text="Подписки"' in text
+        and 'text="Недоступно"' not in text
     ):
         return {"ok": True, "changed": False, "path": str(plugin)}
     original = text
     helper = f'''
 # {MARKER}
-_SUB_CB = {{"s:c1", "s:c0", "s:d1", "s:d0"}}
+_SUB_CB = {{"s:c1", "s:c0", "s:d1", "s:d0", "sub:cats:on", "sub:cats:off", "sub:digest:on", "sub:digest:off"}}
 def _build_subscription_keyboard():
     return "Подписки", [
         [{{"text": "Коты +", "callback_data": "s:c1"}}, {{"text": "Коты -", "callback_data": "s:c0"}}],
         [{{"text": "Дайджест +", "callback_data": "s:d1"}}, {{"text": "Дайджест -", "callback_data": "s:d0"}}],
     ]
+
+
+def _subscription_command_from_callback(cb_data: str) -> str:
+    if cb_data.startswith("s:"):
+        return f"/{{'cats' if cb_data[2] == 'c' else 'digest'}}_{{'subscribe' if cb_data.endswith('1') else 'unsubscribe'}}"
+    if cb_data.startswith("sub:"):
+        parts = cb_data.split(":")
+        if len(parts) == 3 and parts[1] in {{"cats", "digest"}} and parts[2] in {{"on", "off"}}:
+            return f"/{{parts[1]}}_{{'subscribe' if parts[2] == 'on' else 'unsubscribe'}}"
+    return ""
 
 
 def _build_menu_keyboard(command_mode: str, lang: str = "en"):
@@ -60,6 +73,25 @@ def _build_menu_keyboard(command_mode: str, lang: str = "en"):
         text = text.replace('cb_data not in {"sub:cats:on", "sub:cats:off"}', "cb_data not in _SUB_CB")
         text = text.replace('if cb_data in {"sub:cats:on", "sub:cats:off"}:', "if cb_data in _SUB_CB:")
         text = text.replace('command = "/cats_subscribe" if cb_data.endswith(":on") else "/cats_unsubscribe"', 'command = f"/{\'cats\' if cb_data[2] == \'c\' else \'digest\'}_{\'subscribe\' if cb_data.endswith(\'1\') else \'unsubscribe\'}"')
+        text = text.replace('if _cb and str(_cb.get("data") or "") not in _SUB_CB:', "if False:")
+        text = text.replace("and cb_data not in _SUB_CB", "and False")
+        text = text.replace(
+            'command = f"/{\'cats\' if cb_data[2] == \'c\' else \'digest\'}_{\'subscribe\' if cb_data.endswith(\'1\') else \'unsubscribe\'}"',
+            "command = _subscription_command_from_callback(cb_data)",
+        )
+        text = text.replace(
+            '                        await client.answer_callback_query(cb_id, text="Недоступно")\n'
+            '                        continue\n',
+            '''                        header, keyboard = _build_subscription_keyboard()
+                        try:
+                            await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
+                        except Exception:
+                            pass
+                        await client.answer_callback_query(cb_id, text="Подписки")
+                        continue
+''',
+            1,
+        )
     else:
         text = text.replace("def _build_menu_keyboard(", helper + "def _build_menu_keyboard_legacy(", 1)
         text = re.sub(
@@ -87,15 +119,8 @@ def _build_menu_keyboard(command_mode: str, lang: str = "en"):
                                 pass
                             continue
 """,
-        """                        if _cb and str(_cb.get("data") or "") not in _SUB_CB:
-                            try:
-                                await client.answer_callback_query(
-                                    str(_cb.get("id") or ""),
-                                    text=_LOCALIZED_TEXTS[lang]["not_authorized"],
-                                )
-                            except Exception:
-                                pass
-                            continue
+        """                        if False:
+                            pass
 """,
         1,
         )
@@ -108,13 +133,13 @@ def _build_menu_keyboard(command_mode: str, lang: str = "en"):
 """,
         """                        if (
                             (not pinned_chat or str(cb_chat_id) != pinned_chat)
-                            and cb_data not in _SUB_CB
+                            and False
                         ):
                             await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["not_authorized"])
                             continue
 
                         if cb_data in _SUB_CB:
-                            command = f"/{'cats' if cb_data[2] == 'c' else 'digest'}_{'subscribe' if cb_data.endswith('1') else 'unsubscribe'}"
+                            command = _subscription_command_from_callback(cb_data)
                             await client.answer_callback_query(cb_id, text="Обрабатываю")
                             await _inject(api, {
                                 "text": command,
@@ -125,7 +150,12 @@ def _build_menu_keyboard(command_mode: str, lang: str = "en"):
                             continue
 
                         # OUROBOROS_SUB_ROOT_ONLY
-                        await client.answer_callback_query(cb_id, text="Недоступно")
+                        header, keyboard = _build_subscription_keyboard()
+                        try:
+                            await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
+                        except Exception:
+                            pass
+                        await client.answer_callback_query(cb_id, text="Подписки")
                         continue
 
                         # --- Dynamic Tab Navigation (Category 1) ---
@@ -166,7 +196,12 @@ def _build_menu_keyboard(command_mode: str, lang: str = "en"):
         text = text.replace(
             "                        # --- Dynamic Tab Navigation (Category 1) ---",
             """                        # OUROBOROS_SUB_ROOT_ONLY
-                        await client.answer_callback_query(cb_id, text="Недоступно")
+                        header, keyboard = _build_subscription_keyboard()
+                        try:
+                            await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
+                        except Exception:
+                            pass
+                        await client.answer_callback_query(cb_id, text="Подписки")
                         continue
 
                         # --- Dynamic Tab Navigation (Category 1) ---""",
