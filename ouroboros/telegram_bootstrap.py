@@ -10,7 +10,12 @@ import sys
 import time
 from typing import Any, Dict, Optional
 
-from ouroboros.colab_bootstrap import ensure_post_broadcast_live, ensure_research_digest_live, ensure_telegram_bridge_live
+from ouroboros.colab_bootstrap import (
+    ensure_post_broadcast_live,
+    ensure_research_digest_live,
+    ensure_telegram_bridge_live,
+    patch_telegram_bridge_local_stt,
+)
 from ouroboros.config import apply_settings_to_env, load_settings, save_settings
 
 
@@ -278,6 +283,9 @@ def launch_telegram_runtime(
     filter_patch = patch_duckduckgo_source_filter(data_dir)
     if not filter_patch.get("ok"):
         print(f"Warning: DuckDuckGo source filter patch failed: {filter_patch.get('error')}", file=sys.stderr)
+    stt_patch = patch_telegram_bridge_local_stt(data_dir)
+    if not stt_patch.get("ok") and "not found" not in str(stt_patch.get("error") or "").lower():
+        print(f"Warning: Telegram local-STT patch failed: {stt_patch.get('error')}", file=sys.stderr)
 
     server = _start_server(repo_dir, host=host, port=port, data_dir=data_dir)
     port_file = data_dir / "state" / "server_port"

@@ -634,6 +634,18 @@ def patch_telegram_bridge_subscription_menu(
     return patch_plugin(skill_dir / "plugin.py")
 
 
+def patch_telegram_bridge_local_stt(
+    data_dir: pathlib.Path | str | None,
+    slug: str = "telegram-bridge",
+) -> Dict[str, Any]:
+    skill_dir = _telegram_bridge_skill_dir(data_dir, slug)
+    if skill_dir is None:
+        return {"ok": False, "error": "data_dir is not configured"}
+    from ouroboros.telegram_local_stt_patch import patch_plugin
+
+    return patch_plugin(skill_dir / "plugin.py")
+
+
 def _bootstrap_review_official_telegram_bridge(
     data_dir: pathlib.Path | str | None,
     slug: str,
@@ -816,6 +828,11 @@ def ensure_telegram_bridge_live(
         )
     else:
         status["subscription_menu_patch"] = menu_patch
+    stt_patch = patch_telegram_bridge_local_stt(data_dir, slug)
+    if stt_patch.get("ok"):
+        status["steps"].append("local_stt_patch" if stt_patch.get("changed") else "local_stt_patch_present")
+    else:
+        status["local_stt_patch"] = stt_patch
 
     # 3. Install can return before the executable-review state is fresh enough
     #    for enable, and already-installed Drive state can be stale. Always run

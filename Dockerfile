@@ -13,7 +13,7 @@ WORKDIR ${APP_HOME}
 
 # System dependencies (git + Playwright/Chromium native libs installed via playwright install-deps)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl build-essential \
+    git curl build-essential ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies from the repo's runtime requirements.
