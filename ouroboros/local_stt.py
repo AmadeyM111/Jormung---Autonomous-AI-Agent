@@ -30,7 +30,7 @@ def _clean_compute_type(value: str, device: str) -> str:
     text = str(value or "auto").strip()
     if text and text != "auto":
         return text
-    return "int8" if device == "cpu" else "float16"
+    return "float16" if device == "cuda" else "int8"
 
 
 def transcribe_file(
@@ -55,7 +55,14 @@ def transcribe_file(
     if model_dir is not None:
         model_dir.mkdir(parents=True, exist_ok=True)
         kwargs["download_root"] = str(model_dir)
-    whisper = WhisperModel(str(model or "small"), **kwargs)
+    try:
+        whisper = WhisperModel(str(model or "small"), **kwargs)
+    except ValueError as exc:
+        if clean_compute != "float16" or "float16" not in str(exc).lower():
+            raise
+        clean_compute = "int8"
+        kwargs["compute_type"] = clean_compute
+        whisper = WhisperModel(str(model or "small"), **kwargs)
     segments, info = whisper.transcribe(
         str(audio_path),
         language=str(language or "ru").strip() or None,
