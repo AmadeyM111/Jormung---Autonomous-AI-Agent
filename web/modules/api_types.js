@@ -166,6 +166,18 @@
  */
 
 /**
+ * @typedef {Object} AudioUploadResponse
+ * @property {true} ok
+ * @property {string} filename
+ * @property {string} display_name
+ * @property {string} path
+ * @property {number} size
+ * @property {string} mime
+ * @property {number} duration_sec
+ * @property {string} codec
+ */
+
+/**
  * @typedef {Object} OwnerRuntimeModeResponse
  * @property {boolean} ok
  * @property {string} runtime_mode

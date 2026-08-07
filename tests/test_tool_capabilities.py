@@ -119,6 +119,7 @@ def test_search_code_has_result_limit():
     assert "plan_task" in UNTRUNCATED_TOOL_RESULTS
     from ouroboros.tool_capabilities import FOREGROUND_MUTATIVE_TOOLS
     assert "claude_code_edit" in FOREGROUND_MUTATIVE_TOOLS
+    assert "transcribe_audio" in FOREGROUND_MUTATIVE_TOOLS
 
 
 # ---------------------------------------------------------------------------

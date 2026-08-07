@@ -284,6 +284,7 @@ _WORKSPACE_ALLOWED_TOOLS = frozenset({
     "get_task_result",
     "knowledge_read",
     "knowledge_list",
+    "transcribe_audio",
     "web_search",
     "browse_page",
     "browser_action",
@@ -579,7 +580,7 @@ class ToolRegistry:
         "core", "evolution_stats", "git", "git_pr", "git_rollback", "github",
         "health", "knowledge", "memory_tools", "plan_review", "recent_tasks",
         "review", "search", "services", "shell", "skill_exec", "skill_publish",
-        "skill_preflight", "tool_discovery", "vision",
+        "skill_preflight", "tool_discovery", "transcription", "vision",
     ]
 
     def _load_modules(self) -> None:

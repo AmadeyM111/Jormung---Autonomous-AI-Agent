@@ -9,7 +9,7 @@ Pillow>=10.0
 uvicorn[standard]
 websockets
 huggingface_hub
-faster-whisper>=1.1,<2.0
+faster-whisper==1.2.1
 PyYAML>=6.0
 croniter
 tzdata

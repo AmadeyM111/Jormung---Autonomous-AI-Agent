@@ -125,7 +125,7 @@ EXPECTED_TOOLS = [
     "list_skills", "skill_review", "skill_exec", "toggle_skill",
     "skill_preflight", "submit_skill_to_hub",
     "list_available_tools", "enable_tools",
-    "analyze_screenshot", "vlm_query",
+    "analyze_screenshot", "vlm_query", "transcribe_audio",
 ]
 
 

@@ -17,6 +17,17 @@ const PLAN_PREFIX = 'Please do multi-model planning (plan_task tool) and web-sea
 const MAX_PENDING_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_FILE_BYTES = 50 * 1024 * 1024;
 const MAX_PENDING_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+const MAX_AUDIO_ATTACHMENT_FILE_BYTES = 1024 * 1024 * 1024;
+const TRANSCRIPTION_AUDIO_EXTENSIONS = new Set(['m4a', 'mp3', 'wav', 'flac', 'ogg', 'opus']);
+
+function isTranscriptionAudioFile(file) {
+    const name = String(file?.name || '').toLowerCase();
+    const extension = name.includes('.') ? name.split('.').pop() : '';
+    const mime = String(file?.type || '').toLowerCase().split(';')[0];
+    if (TRANSCRIPTION_AUDIO_EXTENSIONS.has(extension)) return true;
+    if (extension === 'mp4') return ['audio/mp4', 'application/mp4'].includes(mime);
+    return ['audio/mp4', 'audio/x-m4a', 'application/mp4', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/flac', 'audio/x-flac', 'audio/ogg', 'audio/opus'].includes(mime);
+}
 
 function getOrCreateChatSessionId() {
     try {
@@ -170,14 +181,26 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
             showToast(`Attach up to ${MAX_PENDING_ATTACHMENTS} files per message.`, 'error');
             return;
         }
-        const oversized = incoming.find((file) => Number(file.size || 0) > MAX_ATTACHMENT_FILE_BYTES);
+        const audioIncoming = incoming.filter(isTranscriptionAudioFile);
+        const existingAudioCount = pendingAttachments.filter((item) => item.is_audio).length;
+        if (existingAudioCount + audioIncoming.length > 1) {
+            showToast('Attach one long-form audio file per transcription request.', 'error');
+            return;
+        }
+        const oversized = incoming.find((file) => Number(file.size || 0) > (
+            isTranscriptionAudioFile(file) ? MAX_AUDIO_ATTACHMENT_FILE_BYTES : MAX_ATTACHMENT_FILE_BYTES
+        ));
         if (oversized) {
-            showToast(`Each attachment must be ${Math.round(MAX_ATTACHMENT_FILE_BYTES / (1024 * 1024))} MB or smaller.`, 'error');
+            const limit = isTranscriptionAudioFile(oversized) ? MAX_AUDIO_ATTACHMENT_FILE_BYTES : MAX_ATTACHMENT_FILE_BYTES;
+            showToast(`This attachment must be ${Math.round(limit / (1024 * 1024))} MB or smaller.`, 'error');
             return;
         }
         const incomingBytes = incoming.reduce((total, file) => total + Number(file.size || 0), 0);
-        if (pendingAttachmentBytes() + incomingBytes > MAX_PENDING_ATTACHMENT_BYTES) {
-            const limitMb = Math.round(MAX_PENDING_ATTACHMENT_BYTES / (1024 * 1024));
+        const pendingLimit = existingAudioCount + audioIncoming.length > 0
+            ? MAX_AUDIO_ATTACHMENT_FILE_BYTES + MAX_ATTACHMENT_FILE_BYTES
+            : MAX_PENDING_ATTACHMENT_BYTES;
+        if (pendingAttachmentBytes() + incomingBytes > pendingLimit) {
+            const limitMb = Math.round(pendingLimit / (1024 * 1024));
             showToast(`Attachments are limited to ${limitMb} MB total per message.`, 'error');
             return;
         }
@@ -187,6 +210,7 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                 : `attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`,
             file,
             display_name: file.name || 'upload',
+            is_audio: isTranscriptionAudioFile(file),
         })));
         updateAttachmentPreview();
     }
@@ -1830,7 +1854,8 @@ export function initChat({ ws, state, updateUnreadBadge, openSettingsTab, openDa
                     if (ws.ws?.readyState !== WebSocket.OPEN) throw new Error('Connection closed during upload. Reconnect and try again.');
                     const formData = new FormData();
                     formData.append('file', stagedItem.file);
-                    const resp = await apiFetch('/api/chat/upload', { method: 'POST', body: formData });
+                    const uploadEndpoint = stagedItem.is_audio ? '/api/audio/upload' : '/api/chat/upload';
+                    const resp = await apiFetch(uploadEndpoint, { method: 'POST', body: formData });
                     const data = await resp.json().catch(() => ({}));
                     if (!resp.ok || !data.ok) {
                         throw new Error(data.error || resp.statusText);

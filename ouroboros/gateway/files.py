@@ -58,6 +58,10 @@ class ChatUploadPayloadTooLarge(ValueError):
     """Chat upload exceeded the configured limit."""
 
 
+class AudioUploadPayloadTooLarge(ValueError):
+    """Audio upload exceeded the independently configured audio limit."""
+
+
 def _request_is_local(request: Request) -> bool:
     host = request.client.host if request.client else None
     return is_loopback_host(host)
@@ -776,6 +780,22 @@ _CHAT_UPLOAD_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 _CHUNK = 64 * 1024  # 64 KB
 
 
+def _audio_upload_max_bytes() -> int:
+    raw: Any = os.environ.get("OUROBOROS_AUDIO_UPLOAD_MAX_BYTES")
+    if raw is None:
+        try:
+            from ouroboros.config import load_settings
+
+            raw = load_settings().get("OUROBOROS_AUDIO_UPLOAD_MAX_BYTES")
+        except Exception:
+            raw = None
+    try:
+        value = int(raw if raw is not None else 1024 * 1024 * 1024)
+    except (TypeError, ValueError):
+        value = 1024 * 1024 * 1024
+    return max(1, value)
+
+
 def _data_dir() -> pathlib.Path:
     return pathlib.Path(os.environ.get(
         "OUROBOROS_DATA_DIR",
@@ -863,6 +883,115 @@ async def api_chat_upload(request: Request) -> JSONResponse:
         "size": bytes_written,
         "mime": mime,
     })
+
+
+async def api_audio_upload(request: Request) -> JSONResponse:
+    """Stream one supported long-form audio attachment into ``data/uploads``."""
+    from ouroboros.transcription import SUPPORTED_EXTENSIONS, SUPPORTED_MIME_TYPES, validate_audio_file
+
+    max_bytes = _audio_upload_max_bytes()
+    try:
+        content_length = int(request.headers.get("content-length", 0) or 0)
+    except (TypeError, ValueError):
+        content_length = 0
+    # Multipart framing is small but not byte-exact, so leave bounded headroom.
+    if content_length > max_bytes + 1024 * 1024:
+        return JSONResponse({"ok": False, "error": f"Audio exceeds {max_bytes}-byte limit"}, status_code=413)
+
+    upload_dir = _data_dir() / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    reserve = max(0, _env_disk_reserve_bytes())
+    expected = min(max_bytes, content_length or max_bytes)
+    if shutil.disk_usage(upload_dir).free < expected + reserve:
+        return JSONResponse({"ok": False, "error": "Insufficient disk space for audio upload"}, status_code=507)
+
+    original_receive = request._receive
+    body_bytes = 0
+
+    async def size_limited_receive():
+        nonlocal body_bytes
+        message = await original_receive()
+        body_bytes += len(message.get("body", b""))
+        if body_bytes > max_bytes + 1024 * 1024:
+            raise AudioUploadPayloadTooLarge(f"Audio exceeds {max_bytes}-byte limit")
+        return message
+
+    request._receive = size_limited_receive
+    try:
+        form = await request.form()
+    except Exception as exc:
+        if isinstance(exc, AudioUploadPayloadTooLarge):
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+        return JSONResponse({"ok": False, "error": f"Upload failed: {exc}"}, status_code=400)
+    finally:
+        request._receive = original_receive
+
+    upload = form.get("file")
+    if not isinstance(upload, UploadFile):
+        return JSONResponse({"ok": False, "error": "No valid file field"}, status_code=400)
+    raw_name = getattr(upload, "filename", "") or "audio"
+    safe_base = os.path.basename(raw_name).replace(" ", "_")[:200] or "audio"
+    extension = pathlib.Path(safe_base).suffix.lower()
+    mime = str(getattr(upload, "content_type", "") or mimetypes.guess_type(safe_base)[0] or "").split(";", 1)[0].lower()
+    if extension not in SUPPORTED_EXTENSIONS or (
+        mime and mime not in SUPPORTED_MIME_TYPES and mime != "application/octet-stream"
+    ):
+        await upload.close()
+        return JSONResponse({"ok": False, "error": "Unsupported audio format"}, status_code=415)
+
+    unique_name = f"{uuid.uuid4().hex}_{safe_base}"
+    destination = upload_dir / unique_name
+    temporary = upload_dir / f".{uuid.uuid4().hex}.uploading"
+    bytes_written = 0
+    try:
+        with temporary.open("wb") as handle:
+            while True:
+                chunk = await upload.read(1024 * 1024)
+                if not chunk:
+                    break
+                bytes_written += len(chunk)
+                if bytes_written > max_bytes:
+                    raise AudioUploadPayloadTooLarge(f"Audio exceeds {max_bytes}-byte limit")
+                handle.write(chunk)
+        temporary.replace(destination)
+        try:
+            metadata = validate_audio_file(destination, max_bytes=max_bytes)
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+    except AudioUploadPayloadTooLarge as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=413)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    finally:
+        await upload.close()
+        temporary.unlink(missing_ok=True)
+
+    return JSONResponse({
+        "ok": True,
+        "filename": unique_name,
+        "display_name": safe_base,
+        "path": str(destination),
+        "size": bytes_written,
+        "mime": mime or mimetypes.guess_type(safe_base)[0] or "application/octet-stream",
+        "duration_sec": metadata.duration_sec,
+        "codec": metadata.codec,
+    })
+
+
+def _env_disk_reserve_bytes() -> int:
+    raw: Any = os.environ.get("OUROBOROS_AUDIO_UPLOAD_DISK_RESERVE_BYTES")
+    if raw is None:
+        try:
+            from ouroboros.config import load_settings
+
+            raw = load_settings().get("OUROBOROS_AUDIO_UPLOAD_DISK_RESERVE_BYTES")
+        except Exception:
+            raw = None
+    try:
+        return int(raw if raw is not None else 64 * 1024 * 1024)
+    except (TypeError, ValueError):
+        return 64 * 1024 * 1024
 
 
 async def api_chat_upload_delete(request: Request) -> JSONResponse:

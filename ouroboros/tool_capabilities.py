@@ -15,7 +15,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
     "knowledge_read", "knowledge_write", "knowledge_list",
     "web_search",
     "browse_page", "browser_action", "analyze_screenshot",
-    "send_user_message", "send_photo", "send_video",
+    "send_user_message", "send_photo", "send_video", "transcribe_audio",
     "switch_model",
     "request_restart", "promote_to_stable",
     "advisory_review", "review_status", "task_acceptance_review",
@@ -103,4 +103,5 @@ REVIEWED_MUTATIVE_TOOLS: frozenset[str] = frozenset({
 # the loop must wait for terminal completion instead of returning while they run.
 FOREGROUND_MUTATIVE_TOOLS: frozenset[str] = frozenset({
     "claude_code_edit",
+    "transcribe_audio",
 })

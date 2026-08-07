@@ -32,6 +32,7 @@ dependencies = [
     "httpx",
     "dulwich",
     "huggingface_hub",
+    "faster-whisper==1.2.1",
     "starlette",
     "python-multipart",
     "Pillow>=10.0",

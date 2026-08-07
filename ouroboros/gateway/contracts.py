@@ -187,6 +187,19 @@ class StatusResponse(TypedDict):
     status: str
 
 
+class AudioUploadResponse(TypedDict):
+    """Shape of a successful ``POST /api/audio/upload`` response."""
+
+    ok: Literal[True]
+    filename: str
+    display_name: str
+    path: str
+    size: int
+    mime: str
+    duration_sec: float
+    codec: str
+
+
 class HealthResponse(TypedDict):
     """Shape of ``GET /api/health``."""
 
@@ -484,6 +497,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/logs/{name}",
     "POST /api/chat/upload",
     "DELETE /api/chat/upload",
+    "POST /api/audio/upload",
     "POST /api/openai-compatible/models",
     "GET /api/local-model/status",
     "POST /api/local-model/start",

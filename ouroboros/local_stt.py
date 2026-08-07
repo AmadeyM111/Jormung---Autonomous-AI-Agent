@@ -42,43 +42,20 @@ def transcribe_file(
     compute_type: str = "auto",
     model_dir: pathlib.Path | None = None,
 ) -> dict[str, Any]:
-    try:
-        from faster_whisper import WhisperModel
-    except Exception as exc:  # pragma: no cover - exercised in container/build environments.
-        raise RuntimeError("faster-whisper is not installed") from exc
+    from ouroboros.transcription import transcribe_short_audio
 
     if not audio_path.is_file():
         raise FileNotFoundError(str(audio_path))
     clean_device = _clean_device(device)
     clean_compute = _clean_compute_type(compute_type, clean_device)
-    kwargs: dict[str, Any] = {"device": clean_device, "compute_type": clean_compute}
-    if model_dir is not None:
-        model_dir.mkdir(parents=True, exist_ok=True)
-        kwargs["download_root"] = str(model_dir)
-    try:
-        whisper = WhisperModel(str(model or "small"), **kwargs)
-    except ValueError as exc:
-        if clean_compute != "float16" or "float16" not in str(exc).lower():
-            raise
-        clean_compute = "int8"
-        kwargs["compute_type"] = clean_compute
-        whisper = WhisperModel(str(model or "small"), **kwargs)
-    segments, info = whisper.transcribe(
-        str(audio_path),
-        language=str(language or "ru").strip() or None,
-        vad_filter=True,
-        beam_size=5,
+    return transcribe_short_audio(
+        audio_path,
+        model=str(model or "small"),
+        language=language,
+        device=clean_device,
+        compute_type=clean_compute,
+        model_dir=model_dir,
     )
-    text = " ".join(str(segment.text or "").strip() for segment in segments).strip()
-    return {
-        "ok": True,
-        "text": text,
-        "language": getattr(info, "language", "") or language,
-        "duration": float(getattr(info, "duration", 0.0) or 0.0),
-        "model": str(model or "small"),
-        "device": clean_device,
-        "compute_type": clean_compute,
-    }
 
 
 def main(argv: list[str] | None = None) -> int:

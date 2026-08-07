@@ -107,7 +107,7 @@ async def _transcribe_voice(api, ogg_bytes: bytes) -> str:
     )
     text = text.replace(
         'api.log("info", f"Whisper transcription success: \'{voice_text}\'")',
-        'api.log("info", f"Local STT transcription success: \'{voice_text}\'")',
+        'api.log("info", f"Local STT transcription success ({len(voice_text)} chars)")',
         1,
     )
     text = text.replace(

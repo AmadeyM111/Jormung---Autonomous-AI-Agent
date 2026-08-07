@@ -1539,3 +1539,19 @@ Rationale: in-process extensions are powerful and therefore stricter than subpro
 ### Generic transport metadata and repair constraints
 
 Transport skills annotate injected chat/photo messages with source/session metadata. Formal repair tasks carry `TaskConstraint(mode="skill_repair")`, and scoped editors enforce payload confinement with short relative paths only under the selected skill.
+
+### Long-form audio transcription
+
+`ouroboros/transcription.py` is the shared local speech-to-text pipeline for
+long recordings and the short Telegram wrapper. It validates containers with
+PyAV, decodes mono 16 kHz PCM incrementally, and sends overlapping chunks to a
+single loaded `faster-whisper` model. Duration and detected hardware select the
+model unless the caller explicitly overrides it.
+
+Each completed chunk atomically updates
+`data/state/transcriptions/<job_id>/checkpoint.json`. Transcript text is kept
+out of tool results and runtime logs; completed Markdown, TXT, and JSON outputs
+are registered in the existing task artifact store. The dedicated
+`POST /api/audio/upload` boundary streams supported audio to `data/uploads`
+under its own configurable 1 GB limit, leaving the general chat attachment
+limit unchanged.
