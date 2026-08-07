@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pathlib
 
-from ouroboros.telegram_audio_attachment_patch import MARKER, _OLD_BLOCK, patch_plugin
+from ouroboros.telegram_audio_attachment_patch import (
+    MARKER,
+    MAX_REVIEW_FILE_BYTES,
+    SUPPORT_MODULE,
+    _OLD_BLOCK,
+    patch_plugin,
+)
 
 
 def _plugin_fixture() -> str:
@@ -49,6 +55,31 @@ def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     assert "[Attached file:" in text
     assert "Audio received" in text
     compile(text, str(plugin), "exec")
+
+
+def test_patch_splits_oversized_plugin_for_review(tmp_path):
+    plugin = tmp_path / "plugin.py"
+    text = _plugin_fixture().replace(
+        "def _make_poller(api):",
+        f"# {'p' * 25_000}\ndef _make_poller(api):",
+    ).replace(
+        "                    photos = message.get(\"photo\") or []",
+        f"                    # {'s' * 40_000}\n                    photos = message.get(\"photo\") or []",
+    )
+    plugin.write_text(text, encoding="utf-8")
+
+    result = patch_plugin(plugin)
+
+    support = plugin.with_name(SUPPORT_MODULE)
+    assert result["ok"] is True
+    assert support.is_file()
+    assert plugin.stat().st_size <= MAX_REVIEW_FILE_BYTES
+    assert support.stat().st_size <= MAX_REVIEW_FILE_BYTES
+    assert MARKER in plugin.read_text(encoding="utf-8")
+    assert "async def _download_transcription_audio" in support.read_text(encoding="utf-8")
+    compile(plugin.read_text(encoding="utf-8"), str(plugin), "exec")
+    compile(support.read_text(encoding="utf-8"), str(support), "exec")
+    assert patch_plugin(plugin)["changed"] is False
 
 
 def test_colab_bootstrap_wrapper_targets_official_bridge(tmp_path):

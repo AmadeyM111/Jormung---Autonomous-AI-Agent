@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import pathlib
 from typing import Any, Dict
 
 
 MARKER = "OUROBOROS_TELEGRAM_AUDIO_ATTACHMENTS"
+MAX_REVIEW_FILE_BYTES = 65_536
+SUPPORT_MODULE = "telegram_plugin_support.py"
 
 
 _HELPER = r'''
@@ -163,13 +166,96 @@ _NEW_BLOCK = f'''                    # {MARKER}: supported document/audio inputs
 '''
 
 
+def _defined_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    return names
+
+
+def _split_for_review(plugin: pathlib.Path, text: str) -> tuple[str, bool]:
+    """Split accumulated bridge patches into two reviewable Python files."""
+    if len(text.encode("utf-8")) <= MAX_REVIEW_FILE_BYTES:
+        return text, False
+    anchor = "def _make_poller(api):"
+    split_at = text.find(anchor)
+    if split_at < 0:
+        raise ValueError("oversized Telegram bridge has no safe module split anchor")
+    support_text = text[:split_at].rstrip() + "\n"
+    suffix = text[split_at:]
+    support_tree = ast.parse(support_text, filename=str(plugin.with_name(SUPPORT_MODULE)))
+    suffix_tree = ast.parse("from __future__ import annotations\n" + suffix, filename=str(plugin))
+    defined = _defined_names(support_tree)
+    loaded = {
+        node.id
+        for node in ast.walk(suffix_tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    imports = sorted(defined & loaded)
+    if not imports:
+        raise ValueError("Telegram bridge module split found no shared names")
+    markers = [line for line in text.splitlines() if line.lstrip().startswith("# OUROBOROS_")]
+    # The subscription patch uses these sentinels for idempotence. Keeping them
+    # in the thin entry module prevents it from trying to patch an already split
+    # implementation on the next bootstrap.
+    marker_text = "\n".join(dict.fromkeys(markers))
+    if "OUROBOROS_TELEGRAM_SUBSCRIPTION_MENU" in marker_text:
+        marker_text += (
+            "\n# split-patch sentinels: s:d1; else 'digest'; "
+            "return _build_subscription_keyboard(); _subscription_command_from_callback; text=\"Подписки\""
+        )
+    import_lines = "\n".join(f"    {name}," for name in imports)
+    entry_text = (
+        "from __future__ import annotations\n\n"
+        f"{marker_text}\n\n"
+        "from .telegram_plugin_support import (\n"
+        f"{import_lines}\n"
+        ")\n\n"
+        f"{suffix}"
+    )
+    support_size = len(support_text.encode("utf-8"))
+    entry_size = len(entry_text.encode("utf-8"))
+    if max(support_size, entry_size) > MAX_REVIEW_FILE_BYTES:
+        raise ValueError(
+            "Telegram bridge cannot be split below the review limit "
+            f"(entry={entry_size}, support={support_size})"
+        )
+    compile(support_text, str(plugin.with_name(SUPPORT_MODULE)), "exec")
+    compile(entry_text, str(plugin), "exec")
+    support = plugin.with_name(SUPPORT_MODULE)
+    support_tmp = support.with_suffix(".py.uploading")
+    plugin_tmp = plugin.with_suffix(".py.uploading")
+    try:
+        support_tmp.write_text(support_text, encoding="utf-8")
+        plugin_tmp.write_text(entry_text, encoding="utf-8")
+        support_tmp.replace(support)
+        plugin_tmp.replace(plugin)
+    finally:
+        support_tmp.unlink(missing_ok=True)
+        plugin_tmp.unlink(missing_ok=True)
+    return entry_text, True
+
+
 def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
     plugin = pathlib.Path(path)
     if not plugin.is_file():
         return {"ok": False, "error": f"telegram-bridge plugin.py not found at {plugin}"}
     text = plugin.read_text(encoding="utf-8")
     if MARKER in text:
-        return {"ok": True, "changed": False, "path": str(plugin)}
+        try:
+            _, split = _split_for_review(plugin, text)
+        except (SyntaxError, ValueError, OSError) as exc:
+            return {"ok": False, "changed": False, "error": str(exc)}
+        return {"ok": True, "changed": split, "path": str(plugin)}
     helper_anchor = "def _make_poller(api):"
     if helper_anchor not in text or _OLD_BLOCK not in text:
         return {"ok": False, "changed": False, "error": "telegram audio attachment patch did not match expected snippets"}
@@ -178,7 +264,12 @@ def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
     if MARKER not in text or "_download_transcription_audio" not in text:
         return {"ok": False, "changed": False, "error": "telegram audio attachment patch verification failed"}
     compile(text, str(plugin), "exec")
-    plugin.write_text(text, encoding="utf-8")
+    try:
+        _, split = _split_for_review(plugin, text)
+    except (SyntaxError, ValueError, OSError) as exc:
+        return {"ok": False, "changed": False, "error": str(exc)}
+    if not split:
+        plugin.write_text(text, encoding="utf-8")
     return {"ok": True, "changed": True, "path": str(plugin)}
 
 
