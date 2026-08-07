@@ -78,15 +78,35 @@ async def _download_transcription_audio(api, client, file_meta: Dict[str, Any]) 
                             raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
                         handle.write(chunk)
         temporary.replace(destination)
-        from ouroboros.transcription import validate_audio_file
-
-        validate_audio_file(destination, max_bytes=max_bytes)
+        actual_size = int(destination.stat().st_size)
+        if actual_size <= 0:
+            raise ValueError("Telegram audio download is empty")
+        if actual_size > max_bytes:
+            raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
+        if declared_size and actual_size != declared_size:
+            raise ValueError("Telegram audio download is incomplete")
         return destination, safe_name
     except Exception:
         destination.unlink(missing_ok=True)
         raise
     finally:
         temporary.unlink(missing_ok=True)
+'''
+
+
+_ISOLATED_RUNTIME_VALIDATION = '''        from ouroboros.transcription import validate_audio_file
+
+        validate_audio_file(destination, max_bytes=max_bytes)
+'''
+
+
+_LOCAL_TRANSPORT_VALIDATION = '''        actual_size = int(destination.stat().st_size)
+        if actual_size <= 0:
+            raise ValueError("Telegram audio download is empty")
+        if actual_size > max_bytes:
+            raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
+        if declared_size and actual_size != declared_size:
+            raise ValueError("Telegram audio download is incomplete")
 '''
 
 
@@ -245,6 +265,32 @@ def _split_for_review(plugin: pathlib.Path, text: str) -> tuple[str, bool]:
     return entry_text, True
 
 
+def _upgrade_isolated_runtime_validation(plugin: pathlib.Path, text: str) -> tuple[str, bool]:
+    """Remove core-package imports that are unavailable inside extensions."""
+    changed = False
+    if _ISOLATED_RUNTIME_VALIDATION in text:
+        text = text.replace(_ISOLATED_RUNTIME_VALIDATION, _LOCAL_TRANSPORT_VALIDATION, 1)
+        changed = True
+    support = plugin.with_name(SUPPORT_MODULE)
+    if support.is_file():
+        support_text = support.read_text(encoding="utf-8")
+        if _ISOLATED_RUNTIME_VALIDATION in support_text:
+            support_text = support_text.replace(
+                _ISOLATED_RUNTIME_VALIDATION,
+                _LOCAL_TRANSPORT_VALIDATION,
+                1,
+            )
+            compile(support_text, str(support), "exec")
+            support_tmp = support.with_suffix(".py.uploading")
+            try:
+                support_tmp.write_text(support_text, encoding="utf-8")
+                support_tmp.replace(support)
+            finally:
+                support_tmp.unlink(missing_ok=True)
+            changed = True
+    return text, changed
+
+
 def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
     plugin = pathlib.Path(path)
     if not plugin.is_file():
@@ -252,10 +298,14 @@ def patch_plugin(path: pathlib.Path | str) -> Dict[str, Any]:
     text = plugin.read_text(encoding="utf-8")
     if MARKER in text:
         try:
+            text, upgraded = _upgrade_isolated_runtime_validation(plugin, text)
             _, split = _split_for_review(plugin, text)
         except (SyntaxError, ValueError, OSError) as exc:
             return {"ok": False, "changed": False, "error": str(exc)}
-        return {"ok": True, "changed": split, "path": str(plugin)}
+        if upgraded and not split:
+            compile(text, str(plugin), "exec")
+            plugin.write_text(text, encoding="utf-8")
+        return {"ok": True, "changed": upgraded or split, "path": str(plugin)}
     helper_anchor = "def _make_poller(api):"
     if helper_anchor not in text or _OLD_BLOCK not in text:
         return {"ok": False, "changed": False, "error": "telegram audio attachment patch did not match expected snippets"}
