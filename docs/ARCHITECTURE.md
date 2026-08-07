@@ -1555,3 +1555,9 @@ are registered in the existing task artifact store. The dedicated
 `POST /api/audio/upload` boundary streams supported audio to `data/uploads`
 under its own configurable 1 GB limit, leaving the general chat attachment
 limit unchanged.
+
+The Telegram launcher applies a durable inbound-audio patch to the reviewed
+bridge. Telegram `audio` objects and supported audio documents are streamed to
+the same `data/uploads` boundary, validated by the shared PyAV probe, and
+injected as attachment paths. Unsupported documents, videos, and stickers stay
+blocked at the transport boundary.
