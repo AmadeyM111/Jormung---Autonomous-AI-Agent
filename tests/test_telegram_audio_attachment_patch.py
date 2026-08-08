@@ -7,6 +7,8 @@ from ouroboros.telegram_audio_attachment_patch import (
     MAX_REVIEW_FILE_BYTES,
     SUPPORT_MODULE,
     _OLD_BLOCK,
+    _PASSIVE_AGENT_REQUEST,
+    _REQUIRED_TOOL_REQUEST,
     patch_plugin,
 )
 
@@ -53,6 +55,8 @@ def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     assert "downloader.stream" in text
     assert "Telegram audio download is incomplete" in text
     assert "from ouroboros" not in text
+    assert "Call the transcribe_audio tool immediately" in text
+    assert "Do not inspect source code" in text
     assert "[Attached file:" in text
     assert "Audio received" in text
     compile(text, str(plugin), "exec")
@@ -110,6 +114,12 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
 ''',
     )
     support.write_text(old, encoding="utf-8")
+    entry = plugin.read_text(encoding="utf-8").replace(
+        _REQUIRED_TOOL_REQUEST,
+        _PASSIVE_AGENT_REQUEST,
+        1,
+    )
+    plugin.write_text(entry, encoding="utf-8")
 
     result = patch_plugin(plugin)
 
@@ -117,6 +127,7 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
     upgraded = support.read_text(encoding="utf-8")
     assert "from ouroboros" not in upgraded
     assert "Telegram audio download is incomplete" in upgraded
+    assert "Call the transcribe_audio tool immediately" in plugin.read_text(encoding="utf-8")
     assert patch_plugin(plugin)["changed"] is False
 
 

@@ -110,6 +110,24 @@ _LOCAL_TRANSPORT_VALIDATION = '''        actual_size = int(destination.stat().st
 '''
 
 
+_PASSIVE_AGENT_REQUEST = '''                            safe_text = (
+                                f"{request_text}\\n\\n"
+                                f"[Attached file: {audio_name} saved to {audio_path}]"
+                            )
+'''
+
+
+_REQUIRED_TOOL_REQUEST = '''                            safe_text = (
+                                f"{request_text}\\n\\n"
+                                "Call the transcribe_audio tool immediately with "
+                                f'path="{audio_path}". Do not inspect source code or claim transcription '
+                                "is running until that tool call has started. Return the generated artifact links "
+                                "when the tool finishes.\\n\\n"
+                                f"[Attached file: {audio_name} saved to {audio_path}]"
+                            )
+'''
+
+
 _OLD_BLOCK = '''                    photos = message.get("photo") or []
                     image_base64 = ""
                     image_mime = ""
@@ -146,6 +164,10 @@ _NEW_BLOCK = f'''                    # {MARKER}: supported document/audio inputs
                             )
                             safe_text = (
                                 f"{{request_text}}\\n\\n"
+                                "Call the transcribe_audio tool immediately with "
+                                f'path="{{audio_path}}". Do not inspect source code or claim transcription '
+                                "is running until that tool call has started. Return the generated artifact links "
+                                "when the tool finishes.\\n\\n"
                                 f"[Attached file: {{audio_name}} saved to {{audio_path}}]"
                             )
                             await client.send_message(
@@ -270,6 +292,9 @@ def _upgrade_isolated_runtime_validation(plugin: pathlib.Path, text: str) -> tup
     changed = False
     if _ISOLATED_RUNTIME_VALIDATION in text:
         text = text.replace(_ISOLATED_RUNTIME_VALIDATION, _LOCAL_TRANSPORT_VALIDATION, 1)
+        changed = True
+    if _PASSIVE_AGENT_REQUEST in text:
+        text = text.replace(_PASSIVE_AGENT_REQUEST, _REQUIRED_TOOL_REQUEST, 1)
         changed = True
     support = plugin.with_name(SUPPORT_MODULE)
     if support.is_file():
