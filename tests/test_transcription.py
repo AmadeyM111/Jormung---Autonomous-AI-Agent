@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import queue
 from types import SimpleNamespace
 
 import pytest
@@ -307,3 +308,18 @@ def test_agent_tool_is_registered_with_twelve_hour_timeout(tmp_path):
     registry = ToolRegistry(repo_dir=tmp_path / "repo", drive_root=tmp_path / "data")
     assert registry.get_schema_by_name("transcribe_audio") is not None
     assert registry.get_timeout("transcribe_audio") == 12 * 60 * 60
+
+
+def test_transcript_document_prefers_live_event_queue(tmp_path):
+    from ouroboros.tools.registry import ToolContext
+    from ouroboros.tools.transcription import _queue_transcript_document
+
+    event_queue = queue.Queue()
+    ctx = ToolContext(
+        repo_dir=tmp_path, drive_root=tmp_path, current_chat_id=42,
+        event_queue=event_queue,
+    )
+    _queue_transcript_document(ctx, {"path": "/tmp/recording.txt", "name": "recording.txt"})
+
+    assert ctx.pending_events == []
+    assert event_queue.get_nowait()["type"] == "send_document"

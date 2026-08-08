@@ -23,6 +23,26 @@ def _path_is_within(path: pathlib.Path, root: pathlib.Path) -> bool:
         return False
 
 
+def _queue_transcript_document(ctx: ToolContext, record: dict[str, Any]) -> None:
+    event = {
+        "type": "send_document",
+        "chat_id": int(ctx.current_chat_id),
+        "file_path": str(record["path"]),
+        "filename": str(record["name"]),
+        "caption": "Стенограмма аудиозаписи",
+    }
+    event_queue = getattr(ctx, "event_queue", None)
+    if event_queue is not None:
+        try:
+            event_queue.put_nowait(event)
+            return
+        except Exception:
+            pass
+    pending_events = getattr(ctx, "pending_events", None)
+    if isinstance(pending_events, list):
+        pending_events.append(event)
+
+
 def resolve_audio_path(ctx: ToolContext, path: str) -> pathlib.Path:
     """Resolve an audio input only inside user-controlled, task-scoped roots."""
     raw_text = str(path or "").strip()
@@ -99,14 +119,8 @@ def _transcribe_audio_tool(
             record = copy_file_to_task_artifacts(ctx, artifact_path, kind="transcript")
             if record:
                 artifact_records.append({"name": record["name"]})
-                if getattr(ctx, "current_chat_id", None) and isinstance(getattr(ctx, "pending_events", None), list):
-                    ctx.pending_events.append({
-                        "type": "send_document",
-                        "chat_id": int(ctx.current_chat_id),
-                        "file_path": str(record["path"]),
-                        "filename": str(record["name"]),
-                        "caption": "Стенограмма аудиозаписи",
-                    })
+                if getattr(ctx, "current_chat_id", None):
+                    _queue_transcript_document(ctx, record)
         result["artifacts"] = artifact_records
         # The transcript text exists only in checkpoint/artifacts, never here.
         return json.dumps(result, ensure_ascii=False)
