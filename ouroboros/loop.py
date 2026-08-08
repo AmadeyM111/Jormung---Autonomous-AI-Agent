@@ -116,6 +116,34 @@ def _latest_user_text(messages: List[Dict[str, Any]]) -> str:
     return ""
 
 
+_AUDIO_EXTENSION_PATTERN = r"(?:m4a|mp4|mp3|wav|flac|ogg|opus)"
+_ATTACHED_AUDIO_PATH_RE = re.compile(
+    rf"\[Attached file:.*? saved to (?P<path>[^\]\r\n]+\.{_AUDIO_EXTENSION_PATTERN})\]",
+    re.IGNORECASE,
+)
+_EXPLICIT_TRANSCRIBE_PATH_RE = re.compile(
+    rf"\btranscribe_audio\b[^\r\n]*?\bpath\s*=\s*(?P<quote>[\"'])(?P<path>.+?\.{_AUDIO_EXTENSION_PATTERN})(?P=quote)",
+    re.IGNORECASE,
+)
+
+
+def _audio_transcription_path(text: str) -> str:
+    """Return an attached audio path only when the user requests transcription."""
+    raw = str(text or "")
+    low = raw.lower()
+    has_intent = any(token in low for token in (
+        "transcrib", "transcript", "speech-to-text", "speech to text",
+        "стенограмм", "транскриб", "расшифров", "распозна",
+    ))
+    if not has_intent:
+        return ""
+    explicit = _EXPLICIT_TRANSCRIBE_PATH_RE.search(raw)
+    if explicit:
+        return explicit.group("path").strip()
+    attached = _ATTACHED_AUDIO_PATH_RE.search(raw)
+    return attached.group("path").strip() if attached else ""
+
+
 def _looks_like_research_digest_request(text: str) -> bool:
     low = str(text or "").lower()
     if "[message from my human]:" in low:
@@ -392,6 +420,53 @@ def _record_direct_tool_call(
         "is_error": is_error,
         "status": "direct_scheduled_route",
     })
+
+
+def _maybe_run_transcription_direct(
+    *,
+    messages: List[Dict[str, Any]],
+    tools_registry,
+    llm_trace: Dict[str, Any],
+    emit_progress: Callable[[str], None],
+) -> str:
+    """Transcribe an attached audio file without relying on provider tool selection."""
+    audio_path = _audio_transcription_path(_latest_user_text(messages))
+    if not audio_path:
+        return ""
+    try:
+        schema = tools_registry.get_schema_by_name("transcribe_audio")
+    except Exception:
+        schema = None
+    if not schema:
+        return ""
+
+    args = {"path": audio_path, "model": "auto", "language": "auto"}
+    emit_progress("Validating audio and starting transcription...")
+    result = str(tools_registry.execute("transcribe_audio", args) or "")
+    is_error = result.startswith("⚠️")
+    _record_direct_tool_call(
+        llm_trace, "transcribe_audio", args, result, is_error=is_error,
+    )
+    llm_trace["reasoning_notes"].append(
+        "transcribe_audio executed directly for an attached-audio transcription request."
+    )
+    if is_error:
+        return result
+
+    try:
+        payload = json.loads(result)
+    except Exception:
+        return result.strip() or "⚠️ TOOL_ERROR (transcribe_audio): empty result"
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return f"⚠️ TOOL_ERROR (transcribe_audio): {payload.get('error') if isinstance(payload, dict) else result}"
+
+    names = [
+        str(item.get("name") or "").strip()
+        for item in payload.get("artifacts", [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    artifact_text = ", ".join(names) or "MD, TXT и JSON"
+    return f"Стенограмма готова. Файлы для скачивания: {artifact_text}."
 
 
 def _caption_from_vision_analysis(analysis: str) -> str:
@@ -1708,6 +1783,14 @@ def run_llm_loop(
     tools._ctx.event_queue = event_queue
     tools._ctx.task_id = task_id
     tools._ctx.messages = messages
+    direct_transcription = _maybe_run_transcription_direct(
+        messages=messages,
+        tools_registry=tools,
+        llm_trace=llm_trace,
+        emit_progress=emit_progress,
+    )
+    if direct_transcription:
+        return _handle_text_response(direct_transcription, llm_trace, accumulated_usage)
     if direct_greeting_answer := _maybe_answer_greeting_direct(messages):
         return _handle_text_response(direct_greeting_answer, llm_trace, accumulated_usage)
     direct_model_answer = _maybe_answer_model_question_direct(messages, active_model)

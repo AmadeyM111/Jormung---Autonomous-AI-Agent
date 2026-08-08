@@ -329,6 +329,66 @@ def test_minimal_context_runs_research_digest_direct_route(monkeypatch):
     assert trace["tool_calls"][0]["tool"] == tool_name
 
 
+def test_attached_audio_runs_transcription_direct_route():
+    calls = []
+    progress = []
+
+    class FakeTools:
+        def get_schema_by_name(self, name):
+            assert name == "transcribe_audio"
+            return {"name": name}
+
+        def execute(self, name, args):
+            calls.append((name, args))
+            return json.dumps({
+                "ok": True,
+                "artifacts": [
+                    {"name": "recording.transcript.md"},
+                    {"name": "recording.transcript.txt"},
+                    {"name": "recording.transcript.json"},
+                ],
+            })
+
+    trace = {"reasoning_notes": [], "tool_calls": []}
+    result = loop_mod._maybe_run_transcription_direct(
+        messages=[{
+            "role": "user",
+            "content": (
+                "Prepare a transcript of the attached audio recording.\n\n"
+                "[Attached file: recording.m4a saved to /ouroboros/data/uploads/abc_recording.m4a]"
+            ),
+        }],
+        tools_registry=FakeTools(),
+        llm_trace=trace,
+        emit_progress=progress.append,
+    )
+
+    assert calls == [(
+        "transcribe_audio",
+        {"path": "/ouroboros/data/uploads/abc_recording.m4a", "model": "auto", "language": "auto"},
+    )]
+    assert progress == ["Validating audio and starting transcription..."]
+    assert "recording.transcript.txt" in result
+    assert trace["tool_calls"][0]["tool"] == "transcribe_audio"
+
+
+def test_attached_audio_without_transcription_intent_does_not_run_direct_route():
+    result = loop_mod._maybe_run_transcription_direct(
+        messages=[{
+            "role": "user",
+            "content": "What is this file? [Attached file: recording.m4a saved to /data/uploads/recording.m4a]",
+        }],
+        tools_registry=SimpleNamespace(
+            get_schema_by_name=lambda _name: {"name": "transcribe_audio"},
+            execute=lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+        ),
+        llm_trace={"reasoning_notes": [], "tool_calls": []},
+        emit_progress=lambda _text: None,
+    )
+
+    assert result == ""
+
+
 def test_minimal_context_runs_duckduckgo_direct_route(monkeypatch):
     monkeypatch.setenv("OUROBOROS_MINIMAL_CONTEXT", "true")
     tool_name = "ext_12_r_duckduckgo_search"
