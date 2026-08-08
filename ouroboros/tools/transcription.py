@@ -99,6 +99,14 @@ def _transcribe_audio_tool(
             record = copy_file_to_task_artifacts(ctx, artifact_path, kind="transcript")
             if record:
                 artifact_records.append({"name": record["name"]})
+                if getattr(ctx, "current_chat_id", None) and isinstance(getattr(ctx, "pending_events", None), list):
+                    ctx.pending_events.append({
+                        "type": "send_document",
+                        "chat_id": int(ctx.current_chat_id),
+                        "file_path": str(record["path"]),
+                        "filename": str(record["name"]),
+                        "caption": "Стенограмма аудиозаписи",
+                    })
         result["artifacts"] = artifact_records
         # The transcript text exists only in checkpoint/artifacts, never here.
         return json.dumps(result, ensure_ascii=False)

@@ -267,7 +267,7 @@ def test_agent_tool_registers_artifacts_without_returning_transcript_text(tmp_pa
     (drive / "uploads").mkdir(parents=True)
     source = drive / "uploads" / "recording.m4a"
     source.write_bytes(b"audio")
-    ctx = ToolContext(repo_dir=repo, drive_root=drive, task_id="task-1")
+    ctx = ToolContext(repo_dir=repo, drive_root=drive, task_id="task-1", current_chat_id=42)
 
     def fake_pipeline(_source, **kwargs):
         artifact = kwargs["output_dir"] / "recording.transcript.txt"
@@ -290,6 +290,13 @@ def test_agent_tool_registers_artifacts_without_returning_transcript_text(tmp_pa
     payload = json.loads(tool_module._transcribe_audio_tool(ctx, str(source)))
     assert payload["artifacts"] == [{"name": "recording.transcript.txt"}]
     assert "secret transcript body" not in json.dumps(payload)
+    assert ctx.pending_events == [{
+        "type": "send_document",
+        "chat_id": 42,
+        "file_path": str(drive / "task_results" / "artifacts" / "task-1" / "recording.transcript.txt"),
+        "filename": "recording.transcript.txt",
+        "caption": "Стенограмма аудиозаписи",
+    }]
     manifest = drive / "task_results" / "artifacts" / "task-1" / ".artifact_manifest.json"
     assert manifest.exists()
 

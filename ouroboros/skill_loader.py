@@ -582,6 +582,7 @@ _GRANTABLE_SKILL_PERMISSIONS = frozenset({
     "subscribe_event:chat.typing",
     "subscribe_event:chat.photo",
     "subscribe_event:chat.video",
+    "subscribe_event:chat.document",
 })
 
 

@@ -1358,6 +1358,33 @@ def _handle_send_video(evt: Dict[str, Any], ctx: Any) -> None:
         )
 
 
+def _handle_send_document(evt: Dict[str, Any], ctx: Any) -> None:
+    """Send a generated document to the active chat transport."""
+    import mimetypes
+    import pathlib
+    try:
+        chat_id = int(evt.get("chat_id") or 0)
+        file_path = pathlib.Path(str(evt.get("file_path") or "")).resolve(strict=False)
+        if not chat_id or not file_path.is_file():
+            return
+        filename = str(evt.get("filename") or file_path.name)
+        caption = str(evt.get("caption") or "")
+        mime = str(evt.get("mime") or mimetypes.guess_type(filename)[0] or "application/octet-stream")
+        ok, err = ctx.bridge.send_document(
+            chat_id, file_path.read_bytes(), filename=filename, caption=caption, mime=mime,
+        )
+        if not ok:
+            ctx.append_jsonl(
+                ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
+                {"ts": utc_now_iso(), "type": "send_document_error", "chat_id": chat_id, "error": err},
+            )
+    except Exception as exc:
+        ctx.append_jsonl(
+            ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
+            {"ts": utc_now_iso(), "type": "send_document_event_error", "error": repr(exc)},
+        )
+
+
 def _handle_owner_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
     """Log owner injections so health checks can detect duplicate processing."""
     from ouroboros.utils import utc_now_iso
@@ -1424,6 +1451,7 @@ EVENT_HANDLERS = {
     "cancel_task": _handle_cancel_task,
     "send_photo": _handle_send_photo,
     "send_video": _handle_send_video,
+    "send_document": _handle_send_document,
     "toggle_evolution": _handle_toggle_evolution,
     "toggle_consciousness": _handle_toggle_consciousness,
     "owner_message_injected": _handle_owner_message_injected,
