@@ -6,9 +6,13 @@ from ouroboros.telegram_audio_attachment_patch import (
     MARKER,
     MAX_REVIEW_FILE_BYTES,
     SUPPORT_MODULE,
+    _DETAILED_INGESTION_ERROR,
     _OLD_BLOCK,
+    _OPAQUE_INGESTION_ERROR,
     _PASSIVE_AGENT_REQUEST,
     _REQUIRED_TOOL_REQUEST,
+    _RETRYING_DOWNLOAD,
+    _SINGLE_ATTEMPT_DOWNLOAD,
     patch_plugin,
 )
 
@@ -54,6 +58,9 @@ def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     assert MARKER in text
     assert "downloader.stream" in text
     assert "Telegram audio download is incomplete" in text
+    assert "for attempt in range(3)" in text
+    assert "detail = str(exc).strip() or repr(exc)" in text
+    assert "Telegram audio ingestion failed: {type(exc).__name__}: {detail[:500]}" in text
     assert "from ouroboros" not in text
     assert "Call the transcribe_audio tool immediately" in text
     assert "Do not inspect source code" in text
@@ -113,12 +120,14 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
         validate_audio_file(destination, max_bytes=max_bytes)
 ''',
     )
+    old = old.replace(_RETRYING_DOWNLOAD, _SINGLE_ATTEMPT_DOWNLOAD, 1)
     support.write_text(old, encoding="utf-8")
     entry = plugin.read_text(encoding="utf-8").replace(
         _REQUIRED_TOOL_REQUEST,
         _PASSIVE_AGENT_REQUEST,
         1,
     )
+    entry = entry.replace(_DETAILED_INGESTION_ERROR, _OPAQUE_INGESTION_ERROR, 1)
     plugin.write_text(entry, encoding="utf-8")
 
     result = patch_plugin(plugin)
@@ -127,7 +136,9 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
     upgraded = support.read_text(encoding="utf-8")
     assert "from ouroboros" not in upgraded
     assert "Telegram audio download is incomplete" in upgraded
+    assert "for attempt in range(3)" in upgraded
     assert "Call the transcribe_audio tool immediately" in plugin.read_text(encoding="utf-8")
+    assert "detail = str(exc).strip() or repr(exc)" in plugin.read_text(encoding="utf-8")
     assert patch_plugin(plugin)["changed"] is False
 
 

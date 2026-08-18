@@ -63,20 +63,31 @@ async def _download_transcription_audio(api, client, file_meta: Dict[str, Any]) 
     temporary = upload_dir / f".{uuid.uuid4().hex}.uploading"
     written = 0
     try:
-        payload = await client.call("getFile", data={"file_id": file_id}, timeout=20)
-        remote_path = str((payload.get("result") or {}).get("file_path") or "").strip()
-        if not remote_path:
-            raise RuntimeError("Telegram file path is missing")
-        async with httpx.AsyncClient(timeout=None) as downloader:
-            async with downloader.stream("GET", f"{client.file_base}/{remote_path}") as response:
-                if response.status_code >= 400:
-                    raise RuntimeError(f"Telegram file download returned HTTP {response.status_code}")
-                with temporary.open("wb") as handle:
-                    async for chunk in response.aiter_bytes(1024 * 1024):
-                        written += len(chunk)
-                        if written > max_bytes:
-                            raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
-                        handle.write(chunk)
+        for attempt in range(3):
+            written = 0
+            temporary.unlink(missing_ok=True)
+            try:
+                payload = await client.call("getFile", data={"file_id": file_id}, timeout=20)
+                remote_path = str((payload.get("result") or {}).get("file_path") or "").strip()
+                if not remote_path:
+                    raise RuntimeError("Telegram file path is missing")
+                async with httpx.AsyncClient(timeout=None) as downloader:
+                    async with downloader.stream("GET", f"{client.file_base}/{remote_path}") as response:
+                        if response.status_code >= 400:
+                            raise RuntimeError(f"Telegram file download returned HTTP {response.status_code}")
+                        with temporary.open("wb") as handle:
+                            async for chunk in response.aiter_bytes(1024 * 1024):
+                                written += len(chunk)
+                                if written > max_bytes:
+                                    raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
+                                handle.write(chunk)
+                break
+            except ValueError:
+                raise
+            except Exception:
+                if attempt >= 2:
+                    raise
+                await asyncio.sleep(1 << attempt)
         temporary.replace(destination)
         actual_size = int(destination.stat().st_size)
         if actual_size <= 0:
@@ -110,6 +121,51 @@ _LOCAL_TRANSPORT_VALIDATION = '''        actual_size = int(destination.stat().st
 '''
 
 
+_SINGLE_ATTEMPT_DOWNLOAD = '''        payload = await client.call("getFile", data={"file_id": file_id}, timeout=20)
+        remote_path = str((payload.get("result") or {}).get("file_path") or "").strip()
+        if not remote_path:
+            raise RuntimeError("Telegram file path is missing")
+        async with httpx.AsyncClient(timeout=None) as downloader:
+            async with downloader.stream("GET", f"{client.file_base}/{remote_path}") as response:
+                if response.status_code >= 400:
+                    raise RuntimeError(f"Telegram file download returned HTTP {response.status_code}")
+                with temporary.open("wb") as handle:
+                    async for chunk in response.aiter_bytes(1024 * 1024):
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
+                        handle.write(chunk)
+'''
+
+
+_RETRYING_DOWNLOAD = '''        for attempt in range(3):
+            written = 0
+            temporary.unlink(missing_ok=True)
+            try:
+                payload = await client.call("getFile", data={"file_id": file_id}, timeout=20)
+                remote_path = str((payload.get("result") or {}).get("file_path") or "").strip()
+                if not remote_path:
+                    raise RuntimeError("Telegram file path is missing")
+                async with httpx.AsyncClient(timeout=None) as downloader:
+                    async with downloader.stream("GET", f"{client.file_base}/{remote_path}") as response:
+                        if response.status_code >= 400:
+                            raise RuntimeError(f"Telegram file download returned HTTP {response.status_code}")
+                        with temporary.open("wb") as handle:
+                            async for chunk in response.aiter_bytes(1024 * 1024):
+                                written += len(chunk)
+                                if written > max_bytes:
+                                    raise ValueError(f"Telegram audio exceeds the {max_bytes}-byte limit")
+                                handle.write(chunk)
+                break
+            except ValueError:
+                raise
+            except Exception:
+                if attempt >= 2:
+                    raise
+                await asyncio.sleep(1 << attempt)
+'''
+
+
 _PASSIVE_AGENT_REQUEST = '''                            safe_text = (
                                 f"{request_text}\\n\\n"
                                 f"[Attached file: {audio_name} saved to {audio_path}]"
@@ -125,6 +181,34 @@ _REQUIRED_TOOL_REQUEST = '''                            safe_text = (
                                 "when the tool finishes.\\n\\n"
                                 f"[Attached file: {audio_name} saved to {audio_path}]"
                             )
+'''
+
+
+_OPAQUE_INGESTION_ERROR = '''                        except Exception as exc:
+                            api.log("error", f"Telegram audio ingestion failed: {type(exc).__name__}")
+                            await client.send_message(
+                                chat_id,
+                                (("Не удалось принять аудиофайл: " if lang == "ru" else "Could not ingest audio: ")
+                                 + f"{type(exc).__name__}"),
+                                parse_mode="",
+                            )
+                            continue
+'''
+
+
+_DETAILED_INGESTION_ERROR = '''                        except Exception as exc:
+                            detail = str(exc).strip() or repr(exc)
+                            api.log(
+                                "error",
+                                f"Telegram audio ingestion failed: {type(exc).__name__}: {detail[:500]}",
+                            )
+                            await client.send_message(
+                                chat_id,
+                                (("Не удалось принять аудиофайл: " if lang == "ru" else "Could not ingest audio: ")
+                                 + detail[:500]),
+                                parse_mode="",
+                            )
+                            continue
 '''
 
 
@@ -180,11 +264,15 @@ _NEW_BLOCK = f'''                    # {MARKER}: supported document/audio inputs
                             await client.send_message(chat_id, str(exc), parse_mode="")
                             continue
                         except Exception as exc:
-                            api.log("error", f"Telegram audio ingestion failed: {{type(exc).__name__}}")
+                            detail = str(exc).strip() or repr(exc)
+                            api.log(
+                                "error",
+                                f"Telegram audio ingestion failed: {{type(exc).__name__}}: {{detail[:500]}}",
+                            )
                             await client.send_message(
                                 chat_id,
                                 (("Не удалось принять аудиофайл: " if lang == "ru" else "Could not ingest audio: ")
-                                 + f"{{type(exc).__name__}}"),
+                                 + detail[:500]),
                                 parse_mode="",
                             )
                             continue
@@ -296,6 +384,9 @@ def _upgrade_isolated_runtime_validation(plugin: pathlib.Path, text: str) -> tup
     if _PASSIVE_AGENT_REQUEST in text:
         text = text.replace(_PASSIVE_AGENT_REQUEST, _REQUIRED_TOOL_REQUEST, 1)
         changed = True
+    if _OPAQUE_INGESTION_ERROR in text:
+        text = text.replace(_OPAQUE_INGESTION_ERROR, _DETAILED_INGESTION_ERROR, 1)
+        changed = True
     support = plugin.with_name(SUPPORT_MODULE)
     if support.is_file():
         support_text = support.read_text(encoding="utf-8")
@@ -313,6 +404,19 @@ def _upgrade_isolated_runtime_validation(plugin: pathlib.Path, text: str) -> tup
             finally:
                 support_tmp.unlink(missing_ok=True)
             changed = True
+        if _SINGLE_ATTEMPT_DOWNLOAD in support_text:
+            support_text = support_text.replace(_SINGLE_ATTEMPT_DOWNLOAD, _RETRYING_DOWNLOAD, 1)
+            compile(support_text, str(support), "exec")
+            support_tmp = support.with_suffix(".py.uploading")
+            try:
+                support_tmp.write_text(support_text, encoding="utf-8")
+                support_tmp.replace(support)
+            finally:
+                support_tmp.unlink(missing_ok=True)
+            changed = True
+    elif _SINGLE_ATTEMPT_DOWNLOAD in text:
+        text = text.replace(_SINGLE_ATTEMPT_DOWNLOAD, _RETRYING_DOWNLOAD, 1)
+        changed = True
     return text, changed
 
 
