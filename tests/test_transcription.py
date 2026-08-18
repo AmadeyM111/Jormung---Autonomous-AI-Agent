@@ -323,3 +323,27 @@ def test_transcript_document_prefers_live_event_queue(tmp_path):
 
     assert ctx.pending_events == []
     assert event_queue.get_nowait()["type"] == "send_document"
+
+
+def test_direct_chat_transcript_document_uses_live_bridge(tmp_path, monkeypatch):
+    from ouroboros.tools.registry import ToolContext
+    from ouroboros.tools.transcription import _deliver_transcript_document
+
+    transcript = tmp_path / "recording.txt"
+    transcript.write_bytes(b"transcript")
+    sent = []
+    bridge = SimpleNamespace(
+        send_document=lambda chat_id, data, filename, caption="", mime="": (
+            sent.append((chat_id, data, filename, caption, mime)) or (True, "ok")
+        ),
+    )
+    monkeypatch.setattr("supervisor.message_bus.try_get_bridge", lambda: bridge)
+    ctx = ToolContext(
+        repo_dir=tmp_path, drive_root=tmp_path, current_chat_id=42,
+        is_direct_chat=True,
+    )
+
+    _deliver_transcript_document(ctx, {"path": str(transcript), "name": transcript.name})
+
+    assert sent == [(42, b"transcript", "recording.txt", "Стенограмма аудиозаписи", "text/plain")]
+    assert ctx.pending_events == []

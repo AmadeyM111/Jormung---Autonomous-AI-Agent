@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import pathlib
 import threading
 from typing import Any, Sequence
@@ -41,6 +42,29 @@ def _queue_transcript_document(ctx: ToolContext, record: dict[str, Any]) -> None
     pending_events = getattr(ctx, "pending_events", None)
     if isinstance(pending_events, list):
         pending_events.append(event)
+
+
+def _deliver_transcript_document(ctx: ToolContext, record: dict[str, Any]) -> None:
+    """Deliver directly in the main chat process; queue from worker processes."""
+    if getattr(ctx, "is_direct_chat", False):
+        try:
+            from supervisor.message_bus import try_get_bridge
+
+            bridge = try_get_bridge()
+            path = pathlib.Path(str(record["path"]))
+            if bridge is not None and path.is_file():
+                ok, _error = bridge.send_document(
+                    int(ctx.current_chat_id),
+                    path.read_bytes(),
+                    filename=str(record["name"]),
+                    caption="Стенограмма аудиозаписи",
+                    mime=mimetypes.guess_type(str(record["name"]))[0] or "application/octet-stream",
+                )
+                if ok:
+                    return
+        except Exception:
+            pass
+    _queue_transcript_document(ctx, record)
 
 
 def resolve_audio_path(ctx: ToolContext, path: str) -> pathlib.Path:
@@ -120,7 +144,7 @@ def _transcribe_audio_tool(
             if record:
                 artifact_records.append({"name": record["name"]})
                 if getattr(ctx, "current_chat_id", None):
-                    _queue_transcript_document(ctx, record)
+                    _deliver_transcript_document(ctx, record)
         result["artifacts"] = artifact_records
         # The transcript text exists only in checkpoint/artifacts, never here.
         return json.dumps(result, ensure_ascii=False)
