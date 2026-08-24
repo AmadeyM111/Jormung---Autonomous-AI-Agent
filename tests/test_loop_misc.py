@@ -253,6 +253,7 @@ def test_minimal_context_keeps_research_digest_extension_tools(tmp_path, monkeyp
         "write_file",
         "edit_text",
         "search_code",
+        "read_spreadsheet",
         "web_search",
         "browse_page",
         "browser_action",

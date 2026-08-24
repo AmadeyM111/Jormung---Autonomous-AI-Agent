@@ -46,7 +46,7 @@ def _minimal_context_tool_schemas(tools_registry) -> Optional[List[Dict[str, Any
     out: List[Dict[str, Any]] = []
     core_raw = str(
         os.environ.get("OUROBOROS_MINIMAL_CONTEXT_CORE_TOOLS")
-        or "read_file,list_files,write_file,edit_text,search_code,web_search,browse_page,browser_action,vlm_query"
+        or "read_file,list_files,write_file,edit_text,search_code,read_spreadsheet,web_search,browse_page,browser_action,vlm_query"
     ).strip()
     core_names = {item.strip() for item in core_raw.split(",") if item.strip()}
     if core_names != {"none"}:
