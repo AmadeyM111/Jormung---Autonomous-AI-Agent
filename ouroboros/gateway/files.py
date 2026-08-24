@@ -869,6 +869,17 @@ async def api_chat_upload(request: Request) -> JSONResponse:
             tmp_dest.unlink(missing_ok=True)
             return JSONResponse({"ok": False, "error": "File exceeds 50 MB limit"}, status_code=413)
         tmp_dest.replace(dest)  # atomic; unique name has no collision
+        if pathlib.Path(safe_base).suffix.lower() == ".xlsx":
+            try:
+                from ouroboros.spreadsheets import inspect_xlsx
+
+                inspect_xlsx(dest, max_rows=1, max_columns=1)
+            except Exception as exc:
+                dest.unlink(missing_ok=True)
+                return JSONResponse(
+                    {"ok": False, "error": f"Invalid XLSX workbook: {exc}"},
+                    status_code=400,
+                )
     finally:
         await upload.close()
         if tmp_dest.exists():
@@ -882,6 +893,7 @@ async def api_chat_upload(request: Request) -> JSONResponse:
         "path": str(dest),
         "size": bytes_written,
         "mime": mime,
+        "kind": "spreadsheet" if pathlib.Path(safe_base).suffix.lower() == ".xlsx" else "file",
     })
 
 

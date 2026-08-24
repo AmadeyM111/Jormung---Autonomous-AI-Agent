@@ -17,6 +17,7 @@ from ouroboros.telegram_audio_attachment_patch import (
     _RETRYING_DOWNLOAD,
     _SINGLE_ATTEMPT_DOWNLOAD,
     _UNFILTERED_AUDIO_META,
+    _XLSX_HELPER,
     patch_plugin,
 )
 
@@ -60,6 +61,20 @@ def test_audio_metadata_filter_rejects_spreadsheets_and_accepts_supported_audio(
     assert is_audio({"file_name": "report.xlsx", "mime_type": "application/octet-stream"}) is False
 
 
+def test_xlsx_metadata_filter_requires_xlsx_extension_and_safe_mime():
+    namespace = {"pathlib": pathlib, "Any": Any, "Dict": Dict}
+    exec(_XLSX_HELPER, namespace)  # pylint: disable=exec-used
+    is_xlsx = namespace["_is_xlsx_document"]
+
+    assert is_xlsx({
+        "file_name": "отчёт.xlsx",
+        "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }) is True
+    assert is_xlsx({"file_name": "report.xlsx", "mime_type": "application/octet-stream"}) is True
+    assert is_xlsx({"file_name": "report.xls", "mime_type": "application/octet-stream"}) is False
+    assert is_xlsx({"file_name": "report.xlsx", "mime_type": "text/plain"}) is False
+
+
 def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     plugin = tmp_path / "plugin.py"
     plugin.write_text(_plugin_fixture(), encoding="utf-8")
@@ -77,8 +92,11 @@ def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     assert "detail = str(exc).strip() or repr(exc)" in text
     assert "Telegram audio ingestion failed: {type(exc).__name__}: {detail[:500]}" in text
     assert "document_meta if _is_transcription_audio(document_meta) else {}" in text
+    assert "spreadsheet_meta = document_meta if _is_xlsx_document(document_meta) else {}" in text
     assert "from ouroboros" not in text
     assert "Call the transcribe_audio tool immediately" in text
+    assert "Call the read_spreadsheet tool immediately" in text
+    assert "async def _download_xlsx_document" in text
     assert "Do not inspect source code" in text
     assert "[Attached file:" in text
     assert "Audio received" in text
@@ -157,7 +175,9 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
     assert "Telegram audio download is incomplete" in upgraded
     assert "for attempt in range(3)" in upgraded
     assert "def _is_transcription_audio(" in upgraded
+    assert "def _is_xlsx_document(" in upgraded
     assert "Call the transcribe_audio tool immediately" in plugin.read_text(encoding="utf-8")
+    assert "Call the read_spreadsheet tool immediately" in plugin.read_text(encoding="utf-8")
     assert "detail = str(exc).strip() or repr(exc)" in plugin.read_text(encoding="utf-8")
     assert "document_meta if _is_transcription_audio(document_meta) else {}" in plugin.read_text(encoding="utf-8")
     assert patch_plugin(plugin)["changed"] is False

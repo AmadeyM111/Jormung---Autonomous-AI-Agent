@@ -15,7 +15,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
     "knowledge_read", "knowledge_write", "knowledge_list",
     "web_search",
     "browse_page", "browser_action", "analyze_screenshot",
-    "send_user_message", "send_photo", "send_video", "transcribe_audio",
+    "send_user_message", "send_photo", "send_video", "transcribe_audio", "read_spreadsheet",
     "switch_model",
     "request_restart", "promote_to_stable",
     "advisory_review", "review_status", "task_acceptance_review",
@@ -43,7 +43,7 @@ LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
 })
 
 READ_ONLY_PARALLEL_TOOLS: frozenset[str] = frozenset({
-    "read_file", "list_files",
+    "read_file", "list_files", "read_spreadsheet",
     "search_code", "recent_tasks",
     "web_search", "codebase_digest", "chat_history",
     "vcs_status", "vcs_diff", "service_status", "service_logs",
@@ -86,6 +86,7 @@ TOOL_RESULT_LIMITS: dict[str, int] = {
     "run_command": 80_000,
     "run_script": 80_000,
     "search_code": 80_000,
+    "read_spreadsheet": 80_000,
     "service_logs": 80_000,
     # skill_exec wraps stdout/stderr; keep the full capped payload visible.
     "skill_exec": 300_000,
