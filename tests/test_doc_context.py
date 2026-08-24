@@ -194,6 +194,8 @@ def test_minimal_context_omits_full_governance_and_memory(monkeypatch):
     text = str(messages[0]["content"])
     assert "You are Jormung" in text
     assert "minimal-context mode" in text
+    assert "language used by the owner in the current request" in text
+    assert "attachment content use another language" in text
     assert "Recent dialogue" in text
     assert "Меня зовут Амадей" in text
     assert "BIBLE.md" not in text
@@ -201,6 +203,16 @@ def test_minimal_context_omits_full_governance_and_memory(monkeypatch):
     assert "Scratchpad" not in text
     assert cap_info["trimmed_sections"] == ["minimal_context"]
     assert cap_info["minimal_context_recent_dialogue"] is True
+
+
+def test_system_prompt_pins_owner_response_language():
+    system_prompt = (
+        pathlib.Path(__file__).resolve().parents[1] / "prompts" / "SYSTEM.md"
+    ).read_text(encoding="utf-8")
+
+    assert "Reply in the language used by the owner in their current request" in system_prompt
+    assert "Switch only when the owner" in system_prompt
+    assert "explicitly asks for another language" in system_prompt
 
 
 def test_version_regexes_match_runtime_formats():
