@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import pathlib
+from typing import Any, Dict
 
 from ouroboros.telegram_audio_attachment_patch import (
     MARKER,
     MAX_REVIEW_FILE_BYTES,
     SUPPORT_MODULE,
+    _AUDIO_META_HELPER,
     _DETAILED_INGESTION_ERROR,
+    _FILTERED_AUDIO_META,
     _OLD_BLOCK,
     _OPAQUE_INGESTION_ERROR,
     _PASSIVE_AGENT_REQUEST,
     _REQUIRED_TOOL_REQUEST,
     _RETRYING_DOWNLOAD,
     _SINGLE_ATTEMPT_DOWNLOAD,
+    _UNFILTERED_AUDIO_META,
     patch_plugin,
 )
 
@@ -45,6 +49,17 @@ def _make_poller(api):
 '''
 
 
+def test_audio_metadata_filter_rejects_spreadsheets_and_accepts_supported_audio():
+    namespace = {"pathlib": pathlib, "Any": Any, "Dict": Dict}
+    exec(_AUDIO_META_HELPER, namespace)  # pylint: disable=exec-used
+    is_audio = namespace["_is_transcription_audio"]
+
+    assert is_audio({"file_name": "meeting.m4a", "mime_type": "audio/mp4"}) is True
+    assert is_audio({"file_name": "voice", "mime_type": "audio/ogg"}) is True
+    assert is_audio({"file_name": "report.xlsx", "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}) is False
+    assert is_audio({"file_name": "report.xlsx", "mime_type": "application/octet-stream"}) is False
+
+
 def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     plugin = tmp_path / "plugin.py"
     plugin.write_text(_plugin_fixture(), encoding="utf-8")
@@ -61,6 +76,7 @@ def test_patch_adds_streaming_audio_ingestion_and_is_idempotent(tmp_path):
     assert "for attempt in range(3)" in text
     assert "detail = str(exc).strip() or repr(exc)" in text
     assert "Telegram audio ingestion failed: {type(exc).__name__}: {detail[:500]}" in text
+    assert "document_meta if _is_transcription_audio(document_meta) else {}" in text
     assert "from ouroboros" not in text
     assert "Call the transcribe_audio tool immediately" in text
     assert "Do not inspect source code" in text
@@ -121,6 +137,7 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
 ''',
     )
     old = old.replace(_RETRYING_DOWNLOAD, _SINGLE_ATTEMPT_DOWNLOAD, 1)
+    old = old.replace(_AUDIO_META_HELPER + "\n\n", "", 1)
     support.write_text(old, encoding="utf-8")
     entry = plugin.read_text(encoding="utf-8").replace(
         _REQUIRED_TOOL_REQUEST,
@@ -128,6 +145,8 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
         1,
     )
     entry = entry.replace(_DETAILED_INGESTION_ERROR, _OPAQUE_INGESTION_ERROR, 1)
+    entry = entry.replace(_FILTERED_AUDIO_META, _UNFILTERED_AUDIO_META, 1)
+    entry = entry.replace("    _is_transcription_audio,\n", "", 1)
     plugin.write_text(entry, encoding="utf-8")
 
     result = patch_plugin(plugin)
@@ -137,8 +156,10 @@ def test_patch_upgrades_split_helper_without_core_runtime_import(tmp_path):
     assert "from ouroboros" not in upgraded
     assert "Telegram audio download is incomplete" in upgraded
     assert "for attempt in range(3)" in upgraded
+    assert "def _is_transcription_audio(" in upgraded
     assert "Call the transcribe_audio tool immediately" in plugin.read_text(encoding="utf-8")
     assert "detail = str(exc).strip() or repr(exc)" in plugin.read_text(encoding="utf-8")
+    assert "document_meta if _is_transcription_audio(document_meta) else {}" in plugin.read_text(encoding="utf-8")
     assert patch_plugin(plugin)["changed"] is False
 
 

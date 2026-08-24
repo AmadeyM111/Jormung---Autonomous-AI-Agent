@@ -12,7 +12,24 @@ MAX_REVIEW_FILE_BYTES = 65_536
 SUPPORT_MODULE = "telegram_plugin_support.py"
 
 
-_HELPER = r'''
+_AUDIO_META_HELPER = r'''def _is_transcription_audio(file_meta: Dict[str, Any]) -> bool:
+    """Return whether Telegram document metadata describes supported audio."""
+    supported_ext = {".m4a", ".mp4", ".mp3", ".wav", ".flac", ".ogg", ".opus"}
+    supported_mime = {
+        "audio/mp4", "audio/x-m4a", "application/mp4", "audio/mpeg", "audio/wav",
+        "audio/x-wav", "audio/flac", "audio/x-flac", "audio/ogg", "audio/opus",
+    }
+    raw_name = pathlib.Path(str(file_meta.get("file_name") or "")).name.strip()
+    suffix = pathlib.Path(raw_name).suffix.lower()
+    mime = str(file_meta.get("mime_type") or "").split(";", 1)[0].strip().lower()
+    return bool(
+        (suffix in supported_ext or (not suffix and mime in supported_mime))
+        and (not mime or mime in supported_mime or mime == "application/octet-stream")
+    )
+'''
+
+
+_HELPER = _AUDIO_META_HELPER + r'''
 async def _download_transcription_audio(api, client, file_meta: Dict[str, Any]) -> tuple[pathlib.Path, str]:
     """Stream one supported Telegram audio object into the shared uploads root."""
     import shutil
@@ -212,6 +229,17 @@ _DETAILED_INGESTION_ERROR = '''                        except Exception as exc:
 '''
 
 
+_UNFILTERED_AUDIO_META = '''                    audio_meta = message.get("audio") or message.get("document") or {}
+'''
+
+
+_FILTERED_AUDIO_META = '''                    document_meta = message.get("document") or {}
+                    audio_meta = message.get("audio") or (
+                        document_meta if _is_transcription_audio(document_meta) else {}
+                    )
+'''
+
+
 _OLD_BLOCK = '''                    photos = message.get("photo") or []
                     image_base64 = ""
                     image_mime = ""
@@ -236,7 +264,10 @@ _OLD_BLOCK = '''                    photos = message.get("photo") or []
 
 
 _NEW_BLOCK = f'''                    # {MARKER}: supported document/audio inputs become path attachments.
-                    audio_meta = message.get("audio") or message.get("document") or {{}}
+                    document_meta = message.get("document") or {{}}
+                    audio_meta = message.get("audio") or (
+                        document_meta if _is_transcription_audio(document_meta) else {{}}
+                    )
                     if audio_meta:
                         try:
                             await client.send_chat_action(chat_id, "typing")
@@ -387,9 +418,22 @@ def _upgrade_isolated_runtime_validation(plugin: pathlib.Path, text: str) -> tup
     if _OPAQUE_INGESTION_ERROR in text:
         text = text.replace(_OPAQUE_INGESTION_ERROR, _DETAILED_INGESTION_ERROR, 1)
         changed = True
+    if _UNFILTERED_AUDIO_META in text:
+        text = text.replace(_UNFILTERED_AUDIO_META, _FILTERED_AUDIO_META, 1)
+        changed = True
     support = plugin.with_name(SUPPORT_MODULE)
     if support.is_file():
         support_text = support.read_text(encoding="utf-8")
+        if "def _is_transcription_audio(" not in support_text:
+            helper_anchor = "async def _download_transcription_audio("
+            if helper_anchor not in support_text:
+                raise ValueError("Telegram audio support module has no download helper anchor")
+            support_text = support_text.replace(
+                helper_anchor,
+                _AUDIO_META_HELPER + "\n\n" + helper_anchor,
+                1,
+            )
+            changed = True
         if _ISOLATED_RUNTIME_VALIDATION in support_text:
             support_text = support_text.replace(
                 _ISOLATED_RUNTIME_VALIDATION,
@@ -414,9 +458,38 @@ def _upgrade_isolated_runtime_validation(plugin: pathlib.Path, text: str) -> tup
             finally:
                 support_tmp.unlink(missing_ok=True)
             changed = True
-    elif _SINGLE_ATTEMPT_DOWNLOAD in text:
-        text = text.replace(_SINGLE_ATTEMPT_DOWNLOAD, _RETRYING_DOWNLOAD, 1)
-        changed = True
+        if changed:
+            compile(support_text, str(support), "exec")
+            support_tmp = support.with_suffix(".py.uploading")
+            try:
+                support_tmp.write_text(support_text, encoding="utf-8")
+                support_tmp.replace(support)
+            finally:
+                support_tmp.unlink(missing_ok=True)
+        if "_is_transcription_audio," not in text:
+            import_anchor = "    _download_transcription_audio,\n"
+            if import_anchor not in text:
+                raise ValueError("Telegram bridge entry module has no audio helper import anchor")
+            text = text.replace(
+                import_anchor,
+                import_anchor + "    _is_transcription_audio,\n",
+                1,
+            )
+            changed = True
+    else:
+        if "def _is_transcription_audio(" not in text:
+            helper_anchor = "async def _download_transcription_audio("
+            if helper_anchor not in text:
+                raise ValueError("Telegram audio plugin has no download helper anchor")
+            text = text.replace(
+                helper_anchor,
+                _AUDIO_META_HELPER + "\n\n" + helper_anchor,
+                1,
+            )
+            changed = True
+        if _SINGLE_ATTEMPT_DOWNLOAD in text:
+            text = text.replace(_SINGLE_ATTEMPT_DOWNLOAD, _RETRYING_DOWNLOAD, 1)
+            changed = True
     return text, changed
 
 
