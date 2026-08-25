@@ -5,6 +5,13 @@ import datetime as dt
 from skills.research_digest import plugin
 
 
+def test_research_digest_manifest_declares_subprocess_permission():
+    manifest_path = pathlib.Path(plugin.__file__).with_name("skill.json")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert "subprocess" in manifest["permissions"]
+
+
 def test_research_digest_parses_rss_and_scores_topics(tmp_path):
     raw = """<?xml version="1.0"?>
     <rss version="2.0"><channel>

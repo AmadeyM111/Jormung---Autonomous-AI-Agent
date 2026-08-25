@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from types import SimpleNamespace
@@ -57,6 +58,42 @@ class HangingLLM:
     def chat(self, **kwargs):
         time.sleep(0.2)
         return {"content": "{\"verdict\":\"PASS\",\"findings\":[],\"summary\":\"late\"}"}, {}
+
+
+def test_multi_model_review_does_not_force_proxy_bypass(monkeypatch, tmp_path):
+    from ouroboros.tools import review as review_tool
+
+    captured = {}
+
+    def fake_run_review_request(request, **_kwargs):
+        captured["request"] = request
+        return SimpleNamespace(
+            actors=[{
+                "status": "ok",
+                "raw_text": "[]",
+                "usage": {},
+                "prompt_ref": {},
+                "response_ref": {},
+            }]
+        )
+
+    monkeypatch.setattr(
+        "ouroboros.review_substrate.run_review_request",
+        fake_run_review_request,
+    )
+    ctx = SimpleNamespace(task_id="review-proxy", drive_root=tmp_path)
+
+    asyncio.run(
+        review_tool._query_model(
+            FakeLLM(),
+            "provider/model",
+            [{"role": "user", "content": "review"}],
+            asyncio.Semaphore(1),
+            ctx,
+        )
+    )
+
+    assert captured["request"].no_proxy is False
 
 
 def test_review_substrate_treats_duplicate_models_as_independent_slots(tmp_path):

@@ -275,7 +275,11 @@ async def _query_model(
                 call_type="multi_model_review",
                 max_tokens=65536,
                 temperature=0.2,
-                no_proxy=True,
+                # Do not force proxy bypass for API/server reviews: some
+                # deployments require the configured egress proxy to reach
+                # remote providers. LLMClient already disables environment
+                # proxies when it is actually running in a worker process.
+                no_proxy=False,
             )
             slot = ReviewSlot(
                 slot_id=slot_id,
