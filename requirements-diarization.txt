@@ -1,0 +1,3 @@
+# Optional local speaker diarization. This installs PyTorch/torchcodec and can
+# materially increase the environment or Docker image size.
+pyannote.audio==4.0.7

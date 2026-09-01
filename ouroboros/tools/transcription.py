@@ -113,6 +113,11 @@ def _transcribe_audio_tool(
     chunk_duration_sec: int | None = None,
     overlap_sec: int | None = None,
     output_formats: Sequence[str] | None = None,
+    provider: str = "local",
+    diarization: str = "auto",
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+    custom_vocabulary: Sequence[str] | None = None,
 ) -> str:
     if not _TRANSCRIPTION_LOCK.acquire(blocking=False):
         return "⚠️ TOOL_ERROR (transcribe_audio): another transcription is already running on this worker"
@@ -137,6 +142,11 @@ def _transcribe_audio_tool(
             compute_type=str(transcription_setting("TRANSCRIPTION_COMPUTE_TYPE", "auto") or "auto"),
             model_dir=model_dir,
             progress=ctx.emit_progress_fn,
+            provider=provider,
+            diarization=diarization,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+            custom_vocabulary=tuple(custom_vocabulary or ()),
         )
         artifact_records = []
         for artifact_path in result.pop("artifacts", []):
@@ -162,8 +172,9 @@ def get_tools() -> list[ToolEntry]:
         {
             "name": "transcribe_audio",
             "description": (
-                "Locally transcribe one supported audio attachment into downloadable Markdown, TXT, and JSON artifacts. "
-                "Use model=large-v3 when the user explicitly requests maximum quality."
+                "Transcribe one supported audio attachment into downloadable Markdown, TXT, and JSON artifacts. "
+                "Local faster-whisper remains the default. Use provider=gemini only when the user explicitly permits "
+                "cloud processing; use diarization=pyannote for recording-wide speaker labels."
             ),
             "parameters": {
                 "type": "object",
@@ -171,6 +182,16 @@ def get_tools() -> list[ToolEntry]:
                     "path": {"type": "string", "description": "Path to an audio attachment or user/workspace file."},
                     "model": {"type": "string", "enum": ["auto", "large-v3", "turbo", "medium", "small"], "default": "auto"},
                     "language": {"type": "string", "default": "auto"},
+                    "provider": {"type": "string", "enum": ["local", "gemini"], "default": "local"},
+                    "diarization": {
+                        "type": "string", "enum": ["auto", "off", "pyannote", "provider"], "default": "auto",
+                    },
+                    "min_speakers": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "max_speakers": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "custom_vocabulary": {
+                        "type": "array", "items": {"type": "string", "maxLength": 200},
+                        "maxItems": 1000, "default": [],
+                    },
                     "chunk_duration_sec": {"type": "integer", "minimum": 60, "maximum": 3600, "default": 900},
                     "overlap_sec": {"type": "integer", "minimum": 0, "maximum": 10, "default": 2},
                     "output_formats": {

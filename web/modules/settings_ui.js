@@ -173,6 +173,8 @@ export const SECRET_KEYS = [
     ['GIGACHAT_CREDENTIALS', 'GigaChat Authorization Key', 'Base64 client_id:secret'],
     ['GIGACHAT_PASSWORD', 'GigaChat Password (basic auth)', 'password'],
     ['ANTHROPIC_API_KEY', 'Anthropic API Key', 'sk-ant-...'],
+    ['GEMINI_API_KEY', 'Gemini API Key', 'Google AI Studio key'],
+    ['HF_TOKEN', 'Hugging Face Token', 'hf_...'],
     ['GITHUB_TOKEN', 'GitHub Token', 'ghp_...'],
     ['OUROBOROS_NETWORK_PASSWORD', 'Network Password', 'Required for LAN/Docker binds'],
 ];

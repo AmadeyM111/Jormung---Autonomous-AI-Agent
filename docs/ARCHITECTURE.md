@@ -1542,11 +1542,35 @@ Transport skills annotate injected chat/photo messages with source/session metad
 
 ### Long-form audio transcription
 
-`ouroboros/transcription.py` is the shared local speech-to-text pipeline for
+`ouroboros/transcription.py` is the shared speech-to-text orchestrator for
 long recordings and the short Telegram wrapper. It validates containers with
 PyAV, decodes mono 16 kHz PCM incrementally, and sends overlapping chunks to a
-single loaded `faster-whisper` model. Duration and detected hardware select the
-model unless the caller explicitly overrides it.
+single loaded `faster-whisper` model by default. Duration and detected hardware
+select the local model unless the caller explicitly overrides it.
+
+Long-form jobs can explicitly select the opt-in `gemini` provider. The adapter
+uploads each at-most-30-minute WAV chunk to the Gemini Files API, invokes
+`gemini-3.5-transcribe` through the Interactions API in verbatim/word-timestamp
+mode, and deletes the remote file immediately. There is no automatic
+local-to-cloud fallback. `GEMINI_API_KEY` is required and neither keys, remote
+URIs, vocabulary nor transcript bodies enter logs or tool results.
+The agent tool itself defaults explicitly to `provider=local` on every request;
+an operator-wide setting cannot silently cross the cloud-consent boundary.
+Cloud work also has separate byte, duration, chunk-count and vocabulary limits
+(`TRANSCRIPTION_GEMINI_*`) before hashing, decoding or upload.
+
+Speaker diarization is independent of STT. Gemini can supply request-scoped
+speaker labels; on multi-chunk recordings these are marked chunk-scoped.
+`diarization=pyannote` instead runs the optional local
+`pyannote/speaker-diarization-community-1` pipeline once over the source and
+aligns its exclusive turns with ASR word timestamps, producing recording-wide
+labels. `pyannote.audio` is deliberately a lazy optional dependency because it
+pulls in a large PyTorch stack; install `requirements-diarization.txt`, accept
+the Hugging Face model terms, and set `HF_TOKEN`. Telemetry defaults off through
+`PYANNOTE_METRICS_ENABLED=0`. For Docker, build the optional stack explicitly
+with `OUROBOROS_INSTALL_DIARIZATION=1 docker compose build ouroboros`; leaving
+the flag unset keeps the standard image smaller. A separate
+`TRANSCRIPTION_PYANNOTE_MAX_DURATION_SEC` cap bounds the expensive global pass.
 
 Each completed chunk atomically updates
 `data/state/transcriptions/<job_id>/checkpoint.json`. Transcript text is kept

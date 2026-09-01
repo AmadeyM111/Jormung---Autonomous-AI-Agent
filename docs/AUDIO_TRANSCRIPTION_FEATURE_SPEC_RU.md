@@ -609,3 +609,32 @@ docs/ARCHITECTURE.md                       описание нового pipelin
 - суммаризация содержания записи.
 
 Эти возможности должны проектироваться как отдельные расширения поверх JSON-сегментов готовой стенограммы.
+
+## 20. Расширение после MVP: спикеры и Gemini 3.5 Transcribe
+
+Реализованы два независимых opt-in расширения:
+
+- `provider=gemini` — облачная транскрибация через Google Gemini Files API и
+  Interactions API, модель `gemini-3.5-transcribe`;
+- `diarization=pyannote` — локальное определение спикеров моделью
+  `pyannote/speaker-diarization-community-1` с последующим совмещением по
+  word timestamps.
+
+Локальный `faster-whisper` остаётся значением по умолчанию. Автоматического
+fallback из локальной обработки в облачную нет: передача записи Google должна
+быть выбрана явно аргументом `provider=gemini` для конкретного вызова. Agent
+tool всегда использует `provider=local`, если аргумент не передан.
+
+Для Gemini требуется `GEMINI_API_KEY`. Запросы с word timestamps/diarization
+ограничены 30 минутами, поэтому длинные записи обрабатываются чанками. Нативные
+метки Gemini для длинной записи имеют область действия одного чанка; для
+стабильных спикеров по всей записи следует использовать pyannote.
+
+Дополнительные fail-closed лимиты: `TRANSCRIPTION_GEMINI_MAX_BYTES` (256 МБ),
+`TRANSCRIPTION_GEMINI_MAX_DURATION_SEC` (2 часа),
+`TRANSCRIPTION_GEMINI_MAX_CHUNKS` (8), а также ограничения размера custom
+vocabulary. Для pyannote по умолчанию действует отдельный лимит 4 часа.
+
+Для pyannote требуется установить `requirements-diarization.txt`, принять
+условия модели на Hugging Face и задать `HF_TOKEN`. Телеметрия pyannote по
+умолчанию выключена (`PYANNOTE_METRICS_ENABLED=0`).
