@@ -29,7 +29,7 @@ SUPPORTED_MIME_TYPES = frozenset({
     "audio/x-wav", "audio/flac", "audio/x-flac", "audio/ogg", "audio/opus",
 })
 SUPPORTED_MODELS = frozenset({"large-v3", "turbo", "medium", "small"})
-SUPPORTED_PROVIDERS = frozenset({"local", "gemini"})
+SUPPORTED_PROVIDERS = frozenset({"local", "gemini", "whisperx"})
 SUPPORTED_DIARIZATION = frozenset({"off", "pyannote", "provider"})
 DEFAULT_GPU_ROUTES = "1800:large-v3,*:turbo"
 DEFAULT_CPU_ROUTES = "900:medium,*:small"
@@ -791,6 +791,8 @@ def _validated_extended_options(
     resolved_diarization = resolve_diarization(diarization)
     if resolved_diarization == "provider" and resolved_provider != "gemini":
         raise TranscriptionError("Provider diarization is available only with provider=gemini")
+    if resolved_provider == "whisperx" and resolved_diarization == "provider":
+        raise TranscriptionError("WhisperX uses diarization=pyannote, not provider")
     if min_speakers is not None and int(min_speakers) < 1:
         raise TranscriptionError("min_speakers must be at least 1")
     if max_speakers is not None and int(max_speakers) < 1:
@@ -807,6 +809,103 @@ def _validated_extended_options(
     if sum(len(item.encode("utf-8")) for item in vocabulary) > byte_limit:
         raise TranscriptionError(f"custom_vocabulary cannot exceed {byte_limit} UTF-8 bytes")
     return resolved_provider, resolved_diarization, vocabulary
+
+
+def _run_whisperx_profile(
+    *,
+    source: AudioMetadata,
+    source_hash: str,
+    state_dir: pathlib.Path,
+    output_dir: pathlib.Path,
+    checkpoint_path: pathlib.Path,
+    job_id: str,
+    requested_model: str,
+    selected_model: str,
+    requested_language: str,
+    device: str,
+    compute_type: str,
+    model_dir: pathlib.Path | None,
+    output_formats: Sequence[str],
+    diarization: str,
+    diarization_model: str,
+    min_speakers: int | None,
+    max_speakers: int | None,
+    diarization_factory: Callable[..., Any] | None,
+    whisperx_client: Callable[..., dict[str, Any]] | None,
+    emit: Callable[[str], None],
+) -> dict[str, Any]:
+    """Run whole-file WhisperX, then reconcile it with Community-1 turns."""
+    checkpoint, checkpoint_warning = load_checkpoint(checkpoint_path, job_id=job_id)
+    warnings: list[str] = [checkpoint_warning] if checkpoint_warning else []
+    resumed = bool(checkpoint and checkpoint.get("status") == "completed")
+    if resumed:
+        collected = list(checkpoint.get("segments", []))
+        final_language = str(checkpoint.get("language") or "unknown")
+    else:
+        emit("Запускаю WhisperX large-v3 с принудительным выравниванием слов…")
+        if whisperx_client is None:
+            from ouroboros.transcription_whisperx import transcribe_with_whisperx
+
+            whisperx_client = transcribe_with_whisperx
+        payload = whisperx_client(
+            source.path,
+            model=selected_model,
+            language=requested_language,
+            device=str(transcription_setting("TRANSCRIPTION_WHISPERX_DEVICE", device) or device),
+            compute_type=str(transcription_setting("TRANSCRIPTION_WHISPERX_COMPUTE_TYPE", compute_type) or compute_type),
+            batch_size=int(transcription_setting("TRANSCRIPTION_WHISPERX_BATCH_SIZE", 8) or 8),
+            model_dir=model_dir,
+            progress=emit,
+        )
+        collected = list(payload.get("segments", []))
+        final_language = str(payload.get("language") or requested_language or "unknown")
+        warnings.extend(str(item) for item in payload.get("warnings", []) or [])
+        atomic_write_json(checkpoint_path, {
+            "schema_version": 1,
+            "job_id": job_id,
+            "status": "completed",
+            "source": {"path": str(source.path), "sha256": source_hash, "size": source.size, "duration_sec": source.duration_sec},
+            "requested_model": requested_model,
+            "selected_model": selected_model,
+            "provider": "whisperx",
+            "diarization": diarization,
+            "language": final_language,
+            "completed_chunks": 1,
+            "total_chunks": 1,
+            "segments": collected,
+        })
+    artifact_segments = collected
+    diarization_status = "off"
+    speaker_scope = "none"
+    if diarization == "pyannote":
+        try:
+            artifact_segments = _apply_pyannote_postprocessing(
+                source=source, source_hash=source_hash, checkpoint_path=checkpoint_path,
+                segments=collected, model=diarization_model, min_speakers=min_speakers,
+                max_speakers=max_speakers, pipeline_factory=diarization_factory, emit=emit,
+            )
+            diarization_status, speaker_scope = "completed", "recording"
+        except Exception as exc:
+            diarization_status = "failed"
+            warnings.append(f"Diarization failed; transcript was preserved ({type(exc).__name__})")
+            emit(warnings[-1])
+    artifacts = write_transcript_artifacts(
+        pathlib.Path(output_dir), source=source, source_sha256=source_hash,
+        language=final_language, requested_model=requested_model, selected_model=selected_model,
+        routing_rule="provider:whisperx", segments=artifact_segments, output_formats=output_formats,
+        provider="whisperx", diarization=diarization, diarization_status=diarization_status,
+        speaker_scope=speaker_scope,
+    )
+    return {
+        "ok": True, "job_id": job_id, "duration_sec": source.duration_sec,
+        "language": final_language, "requested_model": requested_model,
+        "selected_model": selected_model, "provider": "whisperx",
+        "diarization": {"mode": diarization, "status": diarization_status, "speaker_scope": speaker_scope,
+                         "speakers_count": len({item.get("speaker") for item in artifact_segments if item.get("speaker")})},
+        "fallback_from": None, "routing": {"strategy": "manual", "matched_rule": "provider:whisperx"},
+        "resumed": resumed, "segments_count": len(artifact_segments), "artifacts": artifacts,
+        "warnings": warnings,
+    }
 
 
 def _apply_pyannote_postprocessing(
@@ -985,6 +1084,7 @@ def transcribe_audio(
     max_speakers: int | None = None,
     custom_vocabulary: Sequence[str] = (),
     gemini_client: Any | None = None,
+    whisperx_client: Callable[..., dict[str, Any]] | None = None,
     diarization_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Run the full pipeline and return metadata without transcript text."""
@@ -1017,6 +1117,18 @@ def transcribe_audio(
         effective_chunk_sec = min(effective_chunk_sec, 1800)
         if effective_chunk_sec != chunk_duration_sec:
             emit("Gemini word timestamps are limited to 30-minute requests; using 1800-second chunks.")
+    elif resolved_provider == "whisperx":
+        if requested_model not in {"auto", "large-v3"}:
+            raise TranscriptionError("WhisperX profile requires model=large-v3 or auto")
+        selected_model = str(
+            transcription_setting("TRANSCRIPTION_WHISPERX_MODEL", "large-v3") or "large-v3"
+        ).strip()
+        matched_rule = "provider:whisperx"
+        device_class = detect_device(device)
+        effective_chunk_sec = int(source.duration_sec) or 1
+        if resolved_diarization == "off":
+            resolved_diarization = "pyannote"
+            emit("Профиль WhisperX включает diarization Community-1.")
     else:
         device_class = detect_device(device)
         selected_model, matched_rule = route_model(source.duration_sec, device=device_class, model=requested_model)
@@ -1069,6 +1181,16 @@ def transcribe_audio(
         custom_vocabulary=vocabulary,
     )
     checkpoint_path = pathlib.Path(state_dir) / job_id / "checkpoint.json"
+    if resolved_provider == "whisperx":
+        return _run_whisperx_profile(
+            source=source, source_hash=source_hash, state_dir=pathlib.Path(state_dir),
+            output_dir=pathlib.Path(output_dir), checkpoint_path=checkpoint_path, job_id=job_id,
+            requested_model=requested_model, selected_model=selected_model,
+            requested_language=requested_language, device=device_class, compute_type=compute_type,
+            model_dir=model_dir, output_formats=output_formats, diarization=resolved_diarization,
+            diarization_model=diarization_model, min_speakers=min_speakers, max_speakers=max_speakers,
+            diarization_factory=diarization_factory, whisperx_client=whisperx_client, emit=emit,
+        )
     checkpoint, checkpoint_warning = load_checkpoint(checkpoint_path, job_id=job_id)
     resumed = bool(checkpoint and int(checkpoint.get("completed_chunks", 0)) > 0)
     windows = calculate_chunk_windows(source.duration_sec, effective_chunk_sec, overlap_sec)

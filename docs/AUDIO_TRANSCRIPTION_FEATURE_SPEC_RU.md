@@ -638,3 +638,17 @@ vocabulary. Для pyannote по умолчанию действует отде�
 Для pyannote требуется установить `requirements-diarization.txt`, принять
 условия модели на Hugging Face и задать `HF_TOKEN`. Телеметрия pyannote по
 умолчанию выключена (`PYANNOTE_METRICS_ENABLED=0`).
+
+## 21. Профиль WhisperX + Community-1
+
+Для максимальной локальной точности доступен профиль `provider=whisperx`:
+
+1. WhisperX `large-v3` выполняет распознавание всей записи.
+2. WhisperX делает forced alignment и выдаёт word-level timestamps.
+3. `pyannote/speaker-diarization-community-1` один раз размечает всю запись.
+4. Слова и интервалы спикеров объединяются в JSON, MD и TXT artifacts.
+
+Профиль устанавливается отдельно через `requirements-whisperx.txt` или Docker
+build arg `OUROBOROS_INSTALL_WHISPERX=1`. Нужны GPU с достаточной VRAM либо
+CPU-режим с меньшей скоростью; `HF_TOKEN` и принятие условий модели Community-1
+обязательны.

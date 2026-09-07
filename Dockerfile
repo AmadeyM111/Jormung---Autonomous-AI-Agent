@@ -17,12 +17,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies from the repo's runtime requirements.
-COPY requirements.txt requirements-diarization.txt ./
+COPY requirements.txt requirements-diarization.txt requirements-whisperx.txt ./
 ARG OUROBOROS_INSTALL_DIARIZATION=0
+ARG OUROBOROS_INSTALL_WHISPERX=0
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt \
     && if [ "$OUROBOROS_INSTALL_DIARIZATION" = "1" ]; then \
          python -m pip install --no-cache-dir -r requirements-diarization.txt; \
+       fi \
+    && if [ "$OUROBOROS_INSTALL_WHISPERX" = "1" ]; then \
+         python -m pip install --no-cache-dir -r requirements-whisperx.txt; \
        fi
 
 # Install all Playwright native system dependencies for Chromium/WebKit (authoritative list from Playwright)

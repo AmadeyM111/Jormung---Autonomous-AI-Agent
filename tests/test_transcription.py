@@ -513,9 +513,15 @@ def test_agent_tool_is_registered_with_twelve_hour_timeout(tmp_path):
     assert registry.get_schema_by_name("transcribe_audio") is not None
     assert registry.get_timeout("transcribe_audio") == 12 * 60 * 60
     properties = registry.get_schema_by_name("transcribe_audio")["function"]["parameters"]["properties"]
-    assert properties["provider"]["enum"] == ["local", "gemini"]
+    assert properties["provider"]["enum"] == ["local", "gemini", "whisperx"]
     assert properties["provider"]["default"] == "local"
     assert "pyannote" in properties["diarization"]["enum"]
+
+
+def test_whisperx_provider_is_supported():
+    from ouroboros.transcription import resolve_transcription_provider
+
+    assert resolve_transcription_provider("whisperx") == "whisperx"
 
 
 def test_transcript_document_prefers_live_event_queue(tmp_path):

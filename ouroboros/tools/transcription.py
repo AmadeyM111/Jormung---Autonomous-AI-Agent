@@ -174,7 +174,7 @@ def get_tools() -> list[ToolEntry]:
             "description": (
                 "Transcribe one supported audio attachment into downloadable Markdown, TXT, and JSON artifacts. "
                 "Local faster-whisper remains the default. Use provider=gemini only when the user explicitly permits "
-                "cloud processing; use diarization=pyannote for recording-wide speaker labels."
+                "cloud processing; use provider=whisperx for the high-accuracy large-v3 + Community-1 profile."
             ),
             "parameters": {
                 "type": "object",
@@ -182,7 +182,7 @@ def get_tools() -> list[ToolEntry]:
                     "path": {"type": "string", "description": "Path to an audio attachment or user/workspace file."},
                     "model": {"type": "string", "enum": ["auto", "large-v3", "turbo", "medium", "small"], "default": "auto"},
                     "language": {"type": "string", "default": "auto"},
-                    "provider": {"type": "string", "enum": ["local", "gemini"], "default": "local"},
+                    "provider": {"type": "string", "enum": ["local", "gemini", "whisperx"], "default": "local"},
                     "diarization": {
                         "type": "string", "enum": ["auto", "off", "pyannote", "provider"], "default": "auto",
                     },

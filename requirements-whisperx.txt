@@ -1,0 +1,4 @@
+# Optional maximum-accuracy transcription profile:
+# WhisperX supplies forced alignment; pyannote Community-1 supplies speakers.
+whisperx
+pyannote.audio==4.0.7
